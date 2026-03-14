@@ -32,3 +32,11 @@ def test_inspect_invalid_file():
     runner = CliRunner()
     result = runner.invoke(main, ["inspect", "nonexistent.pdf"])
     assert result.exit_code != 0
+
+
+def test_inspect_scanned_pdf(sample_scanned_pdf):
+    runner = CliRunner()
+    result = runner.invoke(main, ["inspect", str(sample_scanned_pdf)])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["type"] == "scanned"

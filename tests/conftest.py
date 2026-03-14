@@ -9,7 +9,7 @@ def sample_native_pdf(tmp_path) -> Path:
     pdf_path = tmp_path / "test_native.pdf"
     doc = fitz.open()
     page = doc.new_page()
-    page.insert_text((50, 50), "Super Mario 64 - Review - Score: 97")
+    page.insert_text((50, 50), "Super Mario 64 - Review - Score: 97 - Una reseña completa del juego más revolucionario de Nintendo 64")
     doc.save(str(pdf_path))
     doc.close()
     return pdf_path

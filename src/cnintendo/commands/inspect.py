@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import re
+
 import click
 import fitz  # PyMuPDF
 
@@ -18,7 +20,7 @@ def _detect_pdf_type(doc: fitz.Document) -> str:
     for i in range(pages_checked):
         page = doc[i]
         text = page.get_text().strip()
-        if len(text) > 10:
+        if len(text) > 50:
             pages_with_text += 1
 
     if pages_with_text == 0:
@@ -31,7 +33,6 @@ def _detect_pdf_type(doc: fitz.Document) -> str:
 
 def _infer_issue_number(filename: str) -> Optional[int]:
     """Intenta inferir el número de issue del nombre de archivo."""
-    import re
     match = re.search(r"(\d{2,4})", filename)
     if match:
         return int(match.group(1))
