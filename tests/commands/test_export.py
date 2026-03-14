@@ -50,7 +50,8 @@ def test_export_tables_exist(tmp_path):
     db_path = tmp_path / "output.db"
 
     runner = CliRunner()
-    runner.invoke(main, ["export", "--input-dir", str(input_dir), "--db", str(db_path)])
+    result = runner.invoke(main, ["export", "--input-dir", str(input_dir), "--db", str(db_path)])
+    assert result.exit_code == 0
 
     conn = sqlite3.connect(db_path)
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -69,7 +70,8 @@ def test_export_data_correct(tmp_path):
     db_path = tmp_path / "output.db"
 
     runner = CliRunner()
-    runner.invoke(main, ["export", "--input-dir", str(input_dir), "--db", str(db_path)])
+    result = runner.invoke(main, ["export", "--input-dir", str(input_dir), "--db", str(db_path)])
+    assert result.exit_code == 0
 
     conn = sqlite3.connect(db_path)
     articles = conn.execute("SELECT title, score FROM articles").fetchall()
@@ -82,3 +84,21 @@ def test_export_data_correct(tmp_path):
     assert len(games) == 1
     assert games[0][0] == "Super Mario 64"
     assert games[0][1] == "N64"
+
+
+def test_export_skips_bad_json(tmp_path):
+    """Files with invalid JSON should be skipped gracefully, not crash."""
+    input_dir = tmp_path / "structured"
+    input_dir.mkdir()
+    (input_dir / "bad_structured.json").write_text("this is not valid json {{{")
+    (input_dir / "revista_001_structured.json").write_text(json.dumps(SAMPLE_STRUCTURED))
+    db_path = tmp_path / "output.db"
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["export", "--input-dir", str(input_dir), "--db", str(db_path)])
+    assert result.exit_code == 0  # should not crash
+
+    conn = sqlite3.connect(db_path)
+    articles = conn.execute("SELECT title FROM articles").fetchall()
+    conn.close()
+    assert len(articles) == 1  # only the valid file was processed

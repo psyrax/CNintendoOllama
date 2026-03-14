@@ -96,7 +96,7 @@ def export(input_dir: Path, db: Path):
 
         issue_row = issue_data.issue.model_dump()
         issue_row.pop("id")
-        database["issues"].insert(issue_row, alter=True)
+        database["issues"].insert(issue_row)
         issue_id = database.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         for article in issue_data.articles:
@@ -111,7 +111,7 @@ def export(input_dir: Path, db: Path):
 
             article_row["issue_id"] = issue_id
             article_row["game_id"] = game_id
-            database["articles"].insert(article_row, alter=True)
+            database["articles"].insert(article_row)
             article_id = database.execute("SELECT last_insert_rowid()").fetchone()[0]
 
             for img_path in images:
