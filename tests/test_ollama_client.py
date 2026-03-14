@@ -18,10 +18,12 @@ def test_client_defaults(monkeypatch):
     monkeypatch.delenv("OLLAMA_URL", raising=False)
     monkeypatch.delenv("OLLAMA_MODEL", raising=False)
     monkeypatch.delenv("OLLAMA_TEXT_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_TIMEOUT", raising=False)
     client = OllamaClient()
     assert client.base_url == "http://localhost:11434"
     assert client.vision_model == "llava"
     assert client.text_model == "llama3"
+    assert client.timeout == 120.0
 
 
 @respx_lib.mock
