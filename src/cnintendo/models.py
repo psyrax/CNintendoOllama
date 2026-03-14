@@ -9,17 +9,17 @@ class IssueMetadata(BaseModel):
     number: Optional[int] = None
     year: Optional[int] = None
     month: Optional[str] = None
-    pages: int
+    pages: int = Field(..., ge=1)
     type: Literal["native", "scanned", "mixed", "unknown"] = "unknown"
 
 
 class Article(BaseModel):
-    page: int
+    page: int = Field(..., ge=1)
     section: str = "unknown"
     title: Optional[str] = None
     game: Optional[str] = None
     platform: Optional[str] = None
-    score: Optional[int] = None
+    score: Optional[float] = None
     text: Optional[str] = None
     images: list[str] = Field(default_factory=list)
 

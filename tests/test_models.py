@@ -27,7 +27,15 @@ def test_article_defaults():
 
 def test_issue_data_serialization():
     meta = IssueMetadata(filename="test.pdf", pages=10)
-    data = IssueData(issue=meta, articles=[])
-    json_str = data.model_dump_json()
-    assert "issue" in json_str
-    assert "articles" in json_str
+    article = Article(page=1, title="Mario", game="Super Mario 64", score=97.0)
+    data = IssueData(issue=meta, articles=[article])
+    # Round-trip: serialize then deserialize
+    restored = IssueData.model_validate_json(data.model_dump_json())
+    assert restored.issue.filename == "test.pdf"
+    assert len(restored.articles) == 1
+    assert restored.articles[0].score == 97.0
+
+def test_issue_metadata_invalid_type():
+    import pytest
+    with pytest.raises(Exception):  # Pydantic ValidationError
+        IssueMetadata(filename="test.pdf", pages=1, type="invalid_type")
