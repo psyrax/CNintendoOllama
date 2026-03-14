@@ -1,3 +1,4 @@
+import json
 import pytest
 import httpx
 import respx as respx_lib
@@ -50,7 +51,6 @@ def test_generate_vision_sends_image(tmp_path):
     assert result == "texto extraído"
     # Verify the request body included an images list
     request = respx_lib.calls.last.request
-    import json
     body = json.loads(request.content)
     assert "images" in body
     assert len(body["images"]) == 1
@@ -69,6 +69,15 @@ def test_is_available_returns_true_on_success():
 def test_is_available_returns_false_on_error():
     respx_lib.get("http://localhost:11434/api/tags").mock(
         side_effect=httpx.ConnectError("connection refused")
+    )
+    client = OllamaClient()
+    assert client.is_available() is False
+
+
+@respx_lib.mock
+def test_is_available_returns_false_on_os_error(monkeypatch):
+    respx_lib.get("http://localhost:11434/api/tags").mock(
+        side_effect=OSError("network unreachable")
     )
     client = OllamaClient()
     assert client.is_available() is False
