@@ -1,0 +1,9 @@
+pyproject.toml
+src/cnintendo/__init__.py
+src/cnintendo.egg-info/PKG-INFO
+src/cnintendo.egg-info/SOURCES.txt
+src/cnintendo.egg-info/dependency_links.txt
+src/cnintendo.egg-info/entry_points.txt
+src/cnintendo.egg-info/requires.txt
+src/cnintendo.egg-info/top_level.txt
+src/cnintendo/commands/__init__.py
