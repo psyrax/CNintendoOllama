@@ -28,7 +28,7 @@ def test_extract_creates_images_dir(sample_native_pdf, tmp_path):
         main,
         ["extract", str(sample_native_pdf), "--output-dir", str(output_dir)]
     )
-    assert (output_dir / "images").exists()
+    assert (output_dir / "images" / sample_native_pdf.stem).exists()
 
 
 def test_extract_text_content(sample_native_pdf, tmp_path):
@@ -55,3 +55,18 @@ def test_extract_idempotent(sample_native_pdf, tmp_path):
     # Second run — should skip
     runner.invoke(main, ["extract", str(sample_native_pdf), "--output-dir", str(output_dir)])
     assert json_files[0].stat().st_mtime == first_mtime  # file not modified
+
+
+def test_extract_force_overwrites(sample_native_pdf, tmp_path):
+    """--force should re-extract even if JSON already exists."""
+    output_dir = tmp_path / "extracted"
+    runner = CliRunner()
+    runner.invoke(main, ["extract", str(sample_native_pdf), "--output-dir", str(output_dir)])
+    json_files = list(output_dir.glob("*.json"))
+    first_mtime = json_files[0].stat().st_mtime
+
+    import time
+    time.sleep(0.01)  # ensure mtime differs
+
+    runner.invoke(main, ["extract", str(sample_native_pdf), "--output-dir", str(output_dir), "--force"])
+    assert json_files[0].stat().st_mtime > first_mtime  # file was updated

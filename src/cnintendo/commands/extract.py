@@ -33,9 +33,9 @@ def _extract_page_scanned(
 ) -> dict:
     """Extrae texto de una página escaneada usando Ollama vision."""
     mat = fitz.Matrix(2, 2)  # 2x zoom para mejor OCR
-    clip = page.get_pixmap(matrix=mat)
+    pixmap = page.get_pixmap(matrix=mat)
     img_path = images_dir / f"page_{page_num:04d}_ocr.jpg"
-    clip.save(str(img_path))
+    pixmap.save(str(img_path))
 
     text = client.generate_vision(OCR_PROMPT, img_path)
     return {"text": text, "image_count": 0, "images": [], "ocr_source": str(img_path)}
@@ -51,8 +51,8 @@ def extract(pdf_path: Path, output_dir: Optional[Path], force: bool):
     output_dir = output_dir or Path("data/extracted")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    images_dir = output_dir / "images"
-    images_dir.mkdir(exist_ok=True)
+    images_dir = output_dir / "images" / pdf_path.stem
+    images_dir.mkdir(parents=True, exist_ok=True)
 
     output_json = output_dir / f"{pdf_path.stem}_extracted.json"
     if output_json.exists() and not force:
@@ -65,24 +65,30 @@ def extract(pdf_path: Path, output_dir: Optional[Path], force: bool):
         click.echo(f"Error al abrir PDF: {e}", err=True)
         sys.exit(1)
 
-    pdf_type = _detect_pdf_type(doc)
-    client = OllamaClient() if pdf_type in ("scanned", "mixed") else None
-
     pages_data = []
-    with click.progressbar(range(len(doc)), label=f"Extrayendo {pdf_path.name}") as bar:
-        for i in bar:
-            page = doc[i]
-            page_text = page.get_text().strip()
+    pdf_type = "unknown"
+    try:
+        pdf_type = _detect_pdf_type(doc)
+        client = OllamaClient() if pdf_type in ("scanned", "mixed") else None
 
-            if pdf_type == "scanned" or (pdf_type == "mixed" and len(page_text) < 50):
-                page_data = _extract_page_scanned(page, i + 1, images_dir, client)
-            else:
-                page_data = _extract_page_native(page)
+        with click.progressbar(range(len(doc)), label=f"Extrayendo {pdf_path.name}") as bar:
+            for i in bar:
+                page = doc[i]
+                page_text = page.get_text().strip()
 
-            page_data["page_number"] = i + 1
-            pages_data.append(page_data)
+                if pdf_type == "scanned" or (pdf_type == "mixed" and len(page_text) < 50):
+                    try:
+                        page_data = _extract_page_scanned(page, i + 1, images_dir, client)
+                    except Exception as e:
+                        click.echo(f"\nError en página {i+1}: {e}", err=True)
+                        page_data = {"text": "", "image_count": 0, "images": [], "error": str(e)}
+                else:
+                    page_data = _extract_page_native(page)
 
-    doc.close()
+                page_data["page_number"] = i + 1
+                pages_data.append(page_data)
+    finally:
+        doc.close()
 
     result = {
         "filename": pdf_path.name,
