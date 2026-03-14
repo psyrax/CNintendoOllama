@@ -34,3 +34,41 @@ def test_generate_calls_correct_endpoint():
     client = OllamaClient()
     result = client.generate("di hola")
     assert result == "hola mundo"
+
+
+@respx_lib.mock
+def test_generate_vision_sends_image(tmp_path):
+    # Create a small test image file
+    img_path = tmp_path / "test.jpg"
+    img_path.write_bytes(b"fake-image-data")
+
+    respx_lib.post("http://localhost:11434/api/generate").mock(
+        return_value=httpx.Response(200, json={"response": "texto extraído"})
+    )
+    client = OllamaClient()
+    result = client.generate_vision("extrae texto", img_path)
+    assert result == "texto extraído"
+    # Verify the request body included an images list
+    request = respx_lib.calls.last.request
+    import json
+    body = json.loads(request.content)
+    assert "images" in body
+    assert len(body["images"]) == 1
+
+
+@respx_lib.mock
+def test_is_available_returns_true_on_success():
+    respx_lib.get("http://localhost:11434/api/tags").mock(
+        return_value=httpx.Response(200, json={"models": []})
+    )
+    client = OllamaClient()
+    assert client.is_available() is True
+
+
+@respx_lib.mock
+def test_is_available_returns_false_on_error():
+    respx_lib.get("http://localhost:11434/api/tags").mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+    client = OllamaClient()
+    assert client.is_available() is False

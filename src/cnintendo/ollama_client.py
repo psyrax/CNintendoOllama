@@ -5,11 +5,9 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
-load_dotenv()
-
-
 class OllamaClient:
     def __init__(self):
+        load_dotenv(override=False)  # won't override env vars already set
         self.base_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
         self.vision_model = os.getenv("OLLAMA_MODEL", "llava")
         self.text_model = os.getenv("OLLAMA_TEXT_MODEL", "llama3")
@@ -51,5 +49,5 @@ class OllamaClient:
             with httpx.Client(timeout=5) as client:
                 response = client.get(f"{self.base_url}/api/tags")
                 return response.status_code == 200
-        except httpx.ConnectError:
+        except (httpx.HTTPError, OSError):
             return False
