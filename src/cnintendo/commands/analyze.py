@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import click
+from pydantic import ValidationError
 
 from cnintendo.models import Article, IssueData, IssueMetadata
 from cnintendo.ollama_client import OllamaClient
@@ -49,11 +50,16 @@ def analyze(extracted_json: Path, output: Optional[Path], force: bool):
         click.echo(f"Ya existe {output}, usa --force para re-analizar.", err=True)
         return
 
-    raw_data = json.loads(extracted_json.read_text())
+    try:
+        raw_data = json.loads(extracted_json.read_text())
+        pages = raw_data["pages"]
+    except (json.JSONDecodeError, KeyError) as e:
+        click.echo(f"Error leyendo JSON extraído: {e}", err=True)
+        sys.exit(1)
 
     pages_text = "\n\n---\n\n".join(
         f"[Página {p['page_number']}]\n{p['text']}"
-        for p in raw_data["pages"]
+        for p in pages
         if p.get("text", "").strip()
     )
 
@@ -69,17 +75,26 @@ def analyze(extracted_json: Path, output: Optional[Path], force: bool):
 
     try:
         parsed = json.loads(response)
-        articles = [Article(**a) for a in parsed.get("articles", [])]
-    except (json.JSONDecodeError, Exception) as e:
-        click.echo(f"Error parseando respuesta de Ollama: {e}", err=True)
+    except json.JSONDecodeError as e:
+        click.echo(f"Ollama no devolvió JSON válido: {e}", err=True)
         click.echo(f"Respuesta recibida: {response[:500]}", err=True)
         sys.exit(1)
 
-    metadata = IssueMetadata(
-        filename=raw_data["filename"],
-        pages=raw_data["total_pages"],
-        type=raw_data.get("pdf_type", "unknown"),
-    )
+    try:
+        articles = [Article(**a) for a in parsed.get("articles", [])]
+    except ValidationError as e:
+        click.echo(f"Datos de Ollama no coinciden con el esquema: {e}", err=True)
+        sys.exit(1)
+
+    try:
+        metadata = IssueMetadata(
+            filename=raw_data["filename"],
+            pages=raw_data["total_pages"],
+            type=raw_data.get("pdf_type", "unknown"),
+        )
+    except KeyError as e:
+        click.echo(f"Campo requerido faltante en JSON extraído: {e}", err=True)
+        sys.exit(1)
     issue_data = IssueData(issue=metadata, articles=articles)
 
     output.write_text(issue_data.model_dump_json(indent=2))

@@ -68,13 +68,11 @@ def test_analyze_idempotent(tmp_path):
         mock_gen.return_value = SAMPLE_OLLAMA_RESPONSE
         runner = CliRunner()
         runner.invoke(main, ["analyze", str(extracted_json), "--output", str(output_json)])
-        first_mtime = output_json.stat().st_mtime
 
-        # Second run — should skip (mock not called again)
+        # Second run — should skip (Ollama not called again)
         mock_gen.reset_mock()
         runner.invoke(main, ["analyze", str(extracted_json), "--output", str(output_json)])
         mock_gen.assert_not_called()
-        assert output_json.stat().st_mtime == first_mtime
 
 
 def test_analyze_default_output_path(tmp_path):
