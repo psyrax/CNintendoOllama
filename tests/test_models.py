@@ -36,6 +36,6 @@ def test_issue_data_serialization():
     assert restored.articles[0].score == 97.0
 
 def test_issue_metadata_invalid_type():
-    import pytest
-    with pytest.raises(Exception):  # Pydantic ValidationError
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
         IssueMetadata(filename="test.pdf", pages=1, type="invalid_type")
