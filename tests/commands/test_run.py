@@ -53,7 +53,8 @@ def test_run_skips_existing(sample_native_pdf, tmp_path):
     extracted_dir.mkdir(parents=True)
 
     # Pre-create extracted JSON to simulate already processed
-    (extracted_dir / "revista_001_extracted.json").write_text(
+    existing_extracted = extracted_dir / "revista_001_extracted.json"
+    existing_extracted.write_text(
         json.dumps({
             "filename": "revista_001.pdf",
             "pdf_type": "native",
@@ -61,6 +62,7 @@ def test_run_skips_existing(sample_native_pdf, tmp_path):
             "pages": [{"page_number": 1, "text": "test content here", "image_count": 0, "images": []}]
         })
     )
+    pre_mtime = existing_extracted.stat().st_mtime
 
     with patch("cnintendo.ollama_client.OllamaClient.generate") as mock_gen:
         mock_gen.return_value = MOCK_OLLAMA_RESPONSE
@@ -68,7 +70,9 @@ def test_run_skips_existing(sample_native_pdf, tmp_path):
         result = runner.invoke(main, ["run", str(pdf_dir), "--data-dir", str(data_dir)])
 
     assert result.exit_code == 0
-    # structured.json should be created (analyze still runs)
+    # The extracted file must not have been rewritten (extract was skipped)
+    assert existing_extracted.stat().st_mtime == pre_mtime
+    # But structured.json should be created (analyze still runs)
     structured = list(extracted_dir.glob("*_structured.json"))
     assert len(structured) >= 1
 

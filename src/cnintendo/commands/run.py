@@ -1,5 +1,4 @@
 from __future__ import annotations
-import json
 from pathlib import Path
 from typing import Optional
 
@@ -16,51 +15,33 @@ console = Console(stderr=True)
 def _run_inspect(pdf: Path, metadata_json: Path) -> bool:
     """Runs the inspect step, returns True on success."""
     import fitz
+    doc = fitz.open(str(pdf))
     try:
-        doc = fitz.open(str(pdf))
         pdf_type = _detect_pdf_type(doc)
         number = _infer_issue_number(pdf.name)
         metadata = IssueMetadata(filename=pdf.name, pages=len(doc), type=pdf_type, number=number)
-        doc.close()
-        metadata_json.write_text(metadata.model_dump_json(indent=2))
-        return True
     except Exception as e:
         console.print(f"  [red]Error en inspect:[/red] {e}")
         return False
-
-
-def _run_extract(pdf: Path, extracted_dir: Path, force: bool) -> bool:
-    """Runs the extract step, returns True on success."""
-    from cnintendo.commands.extract import extract as extract_cmd
-    ctx = click.Context(extract_cmd)
-    try:
-        ctx.invoke(extract_cmd, pdf_path=pdf, output_dir=extracted_dir, force=force)
-        return True
-    except Exception as e:
-        console.print(f"  [red]Error en extract:[/red] {e}")
-        return False
-
-
-def _run_analyze(extracted_json: Path, structured_json: Path, force: bool) -> bool:
-    """Runs the analyze step, returns True on success."""
-    from cnintendo.commands.analyze import analyze as analyze_cmd
-    ctx = click.Context(analyze_cmd)
-    try:
-        ctx.invoke(analyze_cmd, extracted_json=extracted_json, output=structured_json, force=force)
-        return True
-    except Exception as e:
-        console.print(f"  [red]Error en analyze:[/red] {e}")
-        return False
+    finally:
+        doc.close()
+    metadata_json.write_text(metadata.model_dump_json(indent=2))
+    return True
 
 
 @click.command()
+@click.pass_context
 @click.argument("pdf_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--data-dir", type=click.Path(path_type=Path), default=None,
               help="Directorio base para datos intermedios y output. Por defecto: data/")
 @click.option("--force", is_flag=True, help="Re-procesa aunque existan archivos intermedios.")
 @click.option("--skip-export", is_flag=True, help="No ejecuta la exportación a SQLite al final.")
-def run(pdf_dir: Path, data_dir: Optional[Path], force: bool, skip_export: bool):
+def run(ctx: click.Context, pdf_dir: Path, data_dir: Optional[Path], force: bool, skip_export: bool):
     """Ejecuta el pipeline completo sobre una carpeta de PDFs."""
+    from cnintendo.commands.extract import extract as extract_cmd
+    from cnintendo.commands.analyze import analyze as analyze_cmd
+    from cnintendo.commands.export import export as export_cmd
+
     data_dir = data_dir or Path("data")
     extracted_dir = data_dir / "extracted"
     extracted_dir.mkdir(parents=True, exist_ok=True)
@@ -90,17 +71,23 @@ def run(pdf_dir: Path, data_dir: Optional[Path], force: bool, skip_export: bool)
 
         # Step 2: extract
         if not extracted_json.exists() or force:
-            if not _run_extract(pdf, extracted_dir, force):
+            try:
+                ctx.invoke(extract_cmd, pdf_path=pdf, output_dir=extracted_dir, force=force)
+                console.print(f"  extract ✓")
+            except Exception as e:
+                console.print(f"  [red]Error en extract:[/red] {e}")
                 continue
-            console.print(f"  extract ✓")
         else:
             console.print(f"  [yellow]extract: ya existe[/yellow]")
 
         # Step 3: analyze
         if not structured_json.exists() or force:
-            if not _run_analyze(extracted_json, structured_json, force):
+            try:
+                ctx.invoke(analyze_cmd, extracted_json=extracted_json, output=structured_json, force=force)
+                console.print(f"  analyze ✓")
+            except Exception as e:
+                console.print(f"  [red]Error en analyze:[/red] {e}")
                 continue
-            console.print(f"  analyze ✓")
         else:
             console.print(f"  [yellow]analyze: ya existe[/yellow]")
 
@@ -109,8 +96,6 @@ def run(pdf_dir: Path, data_dir: Optional[Path], force: bool, skip_export: bool)
     # Step 4: export
     if not skip_export:
         console.print("\n[bold]Exportando a SQLite...[/bold]")
-        from cnintendo.commands.export import export as export_cmd
-        ctx = click.Context(export_cmd)
         try:
             db_path = data_dir / "output.db"
             ctx.invoke(export_cmd, input_dir=extracted_dir, db=db_path)
