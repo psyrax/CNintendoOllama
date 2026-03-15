@@ -46,75 +46,81 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export, with_descr
     file_handler = logging.FileHandler(str(log_file))
     file_handler.setLevel(logging.ERROR)
     logger = logging.getLogger("cnintendo.run")
+    # Avoid duplicate handlers (important for tests that run multiple invocations)
+    logger.handlers = [h for h in logger.handlers if not isinstance(h, logging.FileHandler)]
     logger.addHandler(file_handler)
     logger.setLevel(logging.ERROR)
 
     items = discover_scans(scans_dir)
     console.print(f"[bold]Encontrados {len(items)} items en {scans_dir}[/bold]")
 
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                  BarColumn(), MofNCompleteColumn(), console=console) as progress:
-        task = progress.add_task("Procesando...", total=len(items))
+    try:
+        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                      BarColumn(), MofNCompleteColumn(), console=console) as progress:
+            task = progress.add_task("Procesando...", total=len(items))
 
-        for item in items:
-            stem = item.pdf.stem
-            extracted_json = extracted_dir / f"{stem}_extracted.json"
-            structured_json = extracted_dir / f"{stem}_structured.json"
-            summary_txt = extracted_dir / f"{stem}_summary.txt"
-            described_json = extracted_dir / f"{stem}_described.json"
+            for item in items:
+                stem = item.pdf.stem
+                extracted_json = extracted_dir / f"{stem}_extracted.json"
+                structured_json = extracted_dir / f"{stem}_structured.json"
+                summary_txt = extracted_dir / f"{stem}_summary.txt"
+                described_json = extracted_dir / f"{stem}_described.json"
 
-            progress.update(task, description=f"[cyan]{item.identifier[:40]}[/cyan]")
+                progress.update(task, description=f"[cyan]{item.identifier[:40]}[/cyan]")
 
-            # Step 1: Extraer texto desde djvu.txt
-            if not extracted_json.exists() or force:
-                try:
-                    extracted_data = item.to_extracted_dict()
-                    extracted_json.write_text(
-                        json.dumps(extracted_data, indent=2, ensure_ascii=False)
-                    )
-                except Exception as e:
-                    logger.error(f"{item.identifier} extract: {e}")
-                    progress.advance(task)
-                    continue
+                # Step 1: Extraer texto desde djvu.txt
+                if not extracted_json.exists() or force:
+                    try:
+                        extracted_data = item.to_extracted_dict()
+                        extracted_json.write_text(
+                            json.dumps(extracted_data, indent=2, ensure_ascii=False)
+                        )
+                    except Exception as e:
+                        logger.error(f"{item.identifier} extract: {e}")
+                        progress.advance(task)
+                        continue
 
-            # Step 2: analyze
-            if not structured_json.exists() or force:
-                try:
-                    ctx.invoke(analyze_cmd, extracted_json=extracted_json,
-                               output=structured_json, force=force, no_clean=False)
-                except Exception as e:
-                    logger.error(f"{item.identifier} analyze: {e}")
-                    progress.advance(task)
-                    continue
+                # Step 2: analyze
+                if not structured_json.exists() or force:
+                    try:
+                        ctx.invoke(analyze_cmd, extracted_json=extracted_json,
+                                   output=structured_json, force=force, no_clean=False)
+                    except (Exception, SystemExit) as e:
+                        logger.error(f"{item.identifier} analyze: {e}")
+                        progress.advance(task)
+                        continue
 
-            # Step 3: summarize (optional)
-            if with_summarize and structured_json.exists() and (not summary_txt.exists() or force):
-                try:
-                    ctx.invoke(summarize_cmd, structured_json=structured_json,
-                               output=summary_txt, force=force)
-                except Exception as e:
-                    logger.error(f"{item.identifier} summarize: {e}")
+                # Step 3: summarize (optional)
+                if with_summarize and structured_json.exists() and (not summary_txt.exists() or force):
+                    try:
+                        ctx.invoke(summarize_cmd, structured_json=structured_json,
+                                   output=summary_txt, force=force)
+                    except (Exception, SystemExit) as e:
+                        logger.error(f"{item.identifier} summarize: {e}")
 
-            # Step 4: describe images (optional, slow)
-            if with_describe and extracted_json.exists() and (not described_json.exists() or force):
-                try:
-                    ctx.invoke(describe_cmd, extracted_json=extracted_json,
-                               output=described_json, force=force)
-                except Exception as e:
-                    logger.error(f"{item.identifier} describe: {e}")
+                # Step 4: describe images (optional, slow)
+                if with_describe and extracted_json.exists() and (not described_json.exists() or force):
+                    try:
+                        ctx.invoke(describe_cmd, extracted_json=extracted_json,
+                                   output=described_json, force=force)
+                    except (Exception, SystemExit) as e:
+                        logger.error(f"{item.identifier} describe: {e}")
 
-            progress.advance(task)
+                progress.advance(task)
 
-    if not skip_export:
-        console.print("\n[bold]Exportando a SQLite...[/bold]")
-        try:
-            db_path = data_dir / "output.db"
-            ctx.invoke(export_cmd, input_dir=extracted_dir, db=db_path)
-            console.print(f"[green]Base de datos:[/green] {db_path}")
-        except Exception as e:
-            console.print(f"[red]Error en export:[/red] {e}")
+        if not skip_export:
+            console.print("\n[bold]Exportando a SQLite...[/bold]")
+            try:
+                db_path = data_dir / "output.db"
+                ctx.invoke(export_cmd, input_dir=extracted_dir, db=db_path)
+                console.print(f"[green]Base de datos:[/green] {db_path}")
+            except Exception as e:
+                console.print(f"[red]Error en export:[/red] {e}")
 
-    console.print(f"\n[green]Completado.[/green] Errores (si hay): {log_file}")
+        console.print(f"\n[green]Completado.[/green] Errores (si hay): {log_file}")
+    finally:
+        logger.removeHandler(file_handler)
+        file_handler.close()
 
 
 @click.command()
