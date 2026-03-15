@@ -82,3 +82,73 @@ def test_scan_item_to_extracted_dict(tmp_path):
     assert extracted["pdf_type"] == "scanned"
     assert extracted["ia_title"] == "Club Nintendo Año 01 Nº 01 (México)"
     assert extracted["ia_subjects"] == ["videojuegos", "nintendo"]
+
+
+META_1991_01 = """<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <identifier>Test01</identifier>
+  <title>Test</title>
+  <date>1991-01</date>
+</metadata>"""
+
+META_1992 = """<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <identifier>Test02</identifier>
+  <title>Test</title>
+  <date>1992</date>
+</metadata>"""
+
+META_1993_06_15 = """<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <identifier>Test03</identifier>
+  <title>Test</title>
+  <date>1993-06-15</date>
+</metadata>"""
+
+META_NO_DATE = """<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <identifier>Test04</identifier>
+  <title>Test</title>
+</metadata>"""
+
+META_EMPTY_DATE = """<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <identifier>Test05</identifier>
+  <title>Test</title>
+  <date></date>
+</metadata>"""
+
+
+def _make_scan_item(tmp_path, identifier, meta_xml_content):
+    scan_dir = tmp_path / identifier
+    scan_dir.mkdir()
+    (scan_dir / f"{identifier}.pdf").write_text("")
+    (scan_dir / f"{identifier}_djvu.txt").write_text("texto\x0cmas texto")
+    meta = scan_dir / f"{identifier}_meta.xml"
+    meta.write_text(meta_xml_content)
+    return discover_scans(tmp_path)[0]
+
+
+def test_date_sort_key_year_and_month(tmp_path):
+    item = _make_scan_item(tmp_path, "Test01", META_1991_01)
+    assert item.date_sort_key == (1991, 1)
+
+
+def test_date_sort_key_year_only(tmp_path):
+    item = _make_scan_item(tmp_path, "Test02", META_1992)
+    assert item.date_sort_key == (1992, 0)
+
+
+def test_date_sort_key_full_date(tmp_path):
+    item = _make_scan_item(tmp_path, "Test03", META_1993_06_15)
+    assert item.date_sort_key == (1993, 6)
+
+
+def test_date_sort_key_no_date(tmp_path):
+    item = _make_scan_item(tmp_path, "Test04", META_NO_DATE)
+    assert item.date_sort_key == (9999, 0)
+
+
+def test_date_sort_key_empty_date(tmp_path):
+    item = _make_scan_item(tmp_path, "Test05", META_EMPTY_DATE)
+    assert item.date_sort_key == (9999, 0)

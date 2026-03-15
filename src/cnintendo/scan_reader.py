@@ -46,6 +46,14 @@ class ScanItem:
             self._meta_cache = parse_meta_xml(self.meta_xml)
         return self._meta_cache
 
+    @property
+    def date_sort_key(self) -> tuple[int, int]:
+        date = self.meta.get("date", "")
+        parts = date.split("-")
+        year = int(parts[0]) if parts and parts[0].isdigit() else 9999
+        month = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+        return (year, month)
+
     def to_extracted_dict(self) -> dict:
         """Genera el dict compatible con el formato _extracted.json del pipeline.
         Incluye campos extra de IA (ia_title, ia_date, ia_subjects, ia_identifier)
