@@ -11,6 +11,15 @@ class IssueMetadata(BaseModel):
     month: Optional[str] = None
     pages: int = Field(..., ge=1)
     type: Literal["native", "scanned", "mixed", "unknown"] = "unknown"
+    ia_title: Optional[str] = None
+    ia_subjects: list[str] = Field(default_factory=list)
+    ia_date: Optional[str] = None
+    ia_identifier: Optional[str] = None
+
+
+class ImageInfo(BaseModel):
+    path: str
+    description: Optional[str] = None
 
 
 class Article(BaseModel):
@@ -21,9 +30,10 @@ class Article(BaseModel):
     platform: Optional[str] = None
     score: Optional[float] = None
     text: Optional[str] = None
-    images: list[str] = Field(default_factory=list)
+    images: list[ImageInfo] = Field(default_factory=list)
 
 
 class IssueData(BaseModel):
     issue: IssueMetadata
     articles: list[Article] = Field(default_factory=list)
+    summary: Optional[str] = None
