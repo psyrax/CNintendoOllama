@@ -1,5 +1,6 @@
 import click
 from cnintendo.commands import inspect, extract, analyze, export, run as run_cmd
+from cnintendo.commands.summarize import summarize
 
 
 @click.group()
@@ -14,3 +15,4 @@ main.add_command(extract.extract)
 main.add_command(analyze.analyze)
 main.add_command(export.export)
 main.add_command(run_cmd.run)
+main.add_command(summarize)
