@@ -72,7 +72,7 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
     logger.addHandler(file_handler)
     logger.setLevel(logging.ERROR)
 
-    all_items = discover_scans(scans_dir)
+    all_items = sorted(discover_scans(scans_dir), key=lambda i: i.date_sort_key)
 
     # En modo retry, filtrar solo los items que fallaron anteriormente
     failures = _load_failures(data_dir)

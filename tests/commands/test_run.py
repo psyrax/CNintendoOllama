@@ -91,3 +91,31 @@ def test_run_creates_sqlite(sample_native_pdf, tmp_path):
 
     assert result.exit_code == 0
     assert (data_dir / "output.db").exists()
+
+
+def _make_scan_dir(base: Path, identifier: str, date: str, djvu_content: str = "texto\x0cmas") -> None:
+    """Helper: crea un directorio de scan válido."""
+    d = base / identifier
+    d.mkdir()
+    (d / f"{identifier}.pdf").write_text("")
+    (d / f"{identifier}_djvu.txt").write_text(djvu_content)
+    (d / f"{identifier}_meta.xml").write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <identifier>{identifier}</identifier>
+  <title>{identifier}</title>
+  <date>{date}</date>
+  <subject>videojuegos</subject>
+</metadata>""")
+
+
+def test_sorted_discover_scans_chronological(tmp_path):
+    """sorted + date_sort_key produces chronological order regardless of directory name order."""
+    scans_dir = tmp_path / "scans"
+    scans_dir.mkdir()
+    _make_scan_dir(scans_dir, "C_1993", "1993-01")
+    _make_scan_dir(scans_dir, "A_1991", "1991-01")
+    _make_scan_dir(scans_dir, "B_1992", "1992-01")
+
+    from cnintendo.scan_reader import discover_scans
+    items = sorted(discover_scans(scans_dir), key=lambda i: i.date_sort_key)
+    assert [i.identifier for i in items] == ["A_1991", "B_1992", "C_1993"]
