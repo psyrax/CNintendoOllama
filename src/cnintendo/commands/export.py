@@ -96,6 +96,19 @@ def _get_or_create_game(db: sqlite_utils.Database, name: str, platform: Optional
     return db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 
+def _date_sort_key(path: Path) -> tuple[int, int]:
+    """Extract year and month from ia_date field for sorting chronologically."""
+    try:
+        raw = json.loads(path.read_text())
+        date = raw.get("issue", {}).get("ia_date", "") or ""
+        parts = date.split("-")
+        year = int(parts[0]) if parts and parts[0].isdigit() else 9999
+        month = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+        return (year, month)
+    except Exception:
+        return (9999, 0)
+
+
 @click.command()
 @click.option("--input-dir", "-i", type=click.Path(path_type=Path),
               default=Path("data/extracted"), show_default=True)
@@ -103,7 +116,7 @@ def _get_or_create_game(db: sqlite_utils.Database, name: str, platform: Optional
               default=Path("data/output.db"), show_default=True)
 def export(input_dir: Path, db: Path):
     """Exporta JSONs estructurados a una base de datos SQLite."""
-    json_files = sorted(input_dir.glob("*_structured.json"))
+    json_files = sorted(input_dir.glob("*_structured.json"), key=_date_sort_key)
     if not json_files:
         click.echo(f"No se encontraron archivos *_structured.json en {input_dir}", err=True)
         return

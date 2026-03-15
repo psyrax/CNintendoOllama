@@ -102,3 +102,88 @@ def test_export_skips_bad_json(tmp_path):
     articles = conn.execute("SELECT title FROM articles").fetchall()
     conn.close()
     assert len(articles) == 1  # only the valid file was processed
+
+
+from cnintendo.commands.export import _date_sort_key
+
+
+def test_date_sort_key_year_and_month(tmp_path):
+    f = tmp_path / "test_structured.json"
+    f.write_text(json.dumps({"issue": {"ia_date": "1991-06"}, "articles": []}))
+    assert _date_sort_key(f) == (1991, 6)
+
+
+def test_date_sort_key_year_only(tmp_path):
+    f = tmp_path / "test_structured.json"
+    f.write_text(json.dumps({"issue": {"ia_date": "1993"}, "articles": []}))
+    assert _date_sort_key(f) == (1993, 0)
+
+
+def test_date_sort_key_full_date(tmp_path):
+    f = tmp_path / "test_structured.json"
+    f.write_text(json.dumps({"issue": {"ia_date": "1992-03-15"}, "articles": []}))
+    assert _date_sort_key(f) == (1992, 3)
+
+
+def test_date_sort_key_missing_date(tmp_path):
+    f = tmp_path / "test_structured.json"
+    f.write_text(json.dumps({"issue": {}, "articles": []}))
+    assert _date_sort_key(f) == (9999, 0)
+
+
+def test_date_sort_key_none_date(tmp_path):
+    f = tmp_path / "test_structured.json"
+    f.write_text(json.dumps({"issue": {"ia_date": None}, "articles": []}))
+    assert _date_sort_key(f) == (9999, 0)
+
+
+def test_date_sort_key_invalid_file(tmp_path):
+    f = tmp_path / "bad.json"
+    f.write_text("not valid json {{{")
+    assert _date_sort_key(f) == (9999, 0)
+
+
+def test_export_chronological_order(tmp_path):
+    """Export debe insertar issues en orden cronológico."""
+    input_dir = tmp_path / "structured"
+    input_dir.mkdir()
+
+    issue_1993 = {
+        "issue": {"id": None, "filename": "c_1993.pdf", "number": 3, "year": 1993,
+                  "month": "enero", "pages": 84, "type": "native",
+                  "ia_title": None, "ia_subjects": [], "ia_date": "1993-01",
+                  "ia_identifier": None},
+        "articles": []
+    }
+    issue_1991 = {
+        "issue": {"id": None, "filename": "a_1991.pdf", "number": 1, "year": 1991,
+                  "month": "enero", "pages": 84, "type": "native",
+                  "ia_title": None, "ia_subjects": [], "ia_date": "1991-01",
+                  "ia_identifier": None},
+        "articles": []
+    }
+    issue_1992 = {
+        "issue": {"id": None, "filename": "b_1992.pdf", "number": 2, "year": 1992,
+                  "month": "enero", "pages": 84, "type": "native",
+                  "ia_title": None, "ia_subjects": [], "ia_date": "1992-01",
+                  "ia_identifier": None},
+        "articles": []
+    }
+
+    # Escribir en orden C, A, B (alfabético ≠ cronológico)
+    (input_dir / "c_1993_structured.json").write_text(json.dumps(issue_1993))
+    (input_dir / "a_1991_structured.json").write_text(json.dumps(issue_1991))
+    (input_dir / "b_1992_structured.json").write_text(json.dumps(issue_1992))
+
+    db_path = tmp_path / "output.db"
+    runner = CliRunner()
+    result = runner.invoke(main, ["export", "--input-dir", str(input_dir), "--db", str(db_path)])
+    assert result.exit_code == 0
+
+    conn = sqlite3.connect(db_path)
+    filenames = [row[0] for row in conn.execute("SELECT filename FROM issues ORDER BY id").fetchall()]
+    conn.close()
+
+    assert filenames == ["a_1991.pdf", "b_1992.pdf", "c_1993.pdf"], (
+        f"Esperado orden cronológico, obtenido: {filenames}"
+    )
