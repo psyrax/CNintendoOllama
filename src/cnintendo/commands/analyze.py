@@ -45,6 +45,11 @@ def _strip_fences(response: str) -> str:
     return fence_match.group(1) if fence_match else response
 
 
+def _fix_invalid_escapes(s: str) -> str:
+    """Reemplaza escapes inválidos de JSON (e.g. \\N, \\s) con su versión escapada."""
+    return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
+
+
 def _clean_article_text(client: OllamaClient, text: str) -> str:
     if not text or not text.strip():
         return text
@@ -95,10 +100,14 @@ def analyze(extracted_json: Path, output: Optional[Path], force: bool, no_clean:
 
     try:
         parsed = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        click.echo(f"Ollama no devolvió JSON válido: {e}", err=True)
-        click.echo(f"Respuesta recibida: {response[:500]}", err=True)
-        sys.exit(1)
+    except json.JSONDecodeError:
+        # Fallback: algunos modelos generan escapes inválidos (e.g. \N, \s)
+        try:
+            parsed = json.loads(_fix_invalid_escapes(cleaned))
+        except json.JSONDecodeError as e:
+            click.echo(f"Ollama no devolvió JSON válido: {e}", err=True)
+            click.echo(f"Respuesta recibida: {response[:500]}", err=True)
+            sys.exit(1)
 
     # Normalize fields that models sometimes return as lists
     raw_articles = parsed.get("articles", [])
