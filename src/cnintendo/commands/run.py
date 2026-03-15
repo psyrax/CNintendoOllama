@@ -31,7 +31,28 @@ def _run_inspect(pdf: Path, metadata_json: Path) -> bool:
     return True
 
 
-def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export, with_describe, with_summarize):
+def _load_failures(data_dir: Path) -> dict[str, str]:
+    """Carga el registro de fallos previos. Retorna {identifier: step}."""
+    failures_file = data_dir / "run_failures.json"
+    if failures_file.exists():
+        try:
+            return json.loads(failures_file.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _save_failures(data_dir: Path, failures: dict[str, str]) -> None:
+    """Persiste el registro de fallos en run_failures.json."""
+    failures_file = data_dir / "run_failures.json"
+    if failures:
+        failures_file.write_text(json.dumps(failures, indent=2, ensure_ascii=False))
+    elif failures_file.exists():
+        failures_file.unlink()
+
+
+def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
+                        with_describe, with_summarize, retry_failed):
     from cnintendo.scan_reader import discover_scans
     from cnintendo.commands.analyze import analyze as analyze_cmd
     from cnintendo.commands.summarize import summarize as summarize_cmd
@@ -44,15 +65,26 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export, with_descr
 
     log_file = data_dir / "run_errors.log"
     file_handler = logging.FileHandler(str(log_file))
+    file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     file_handler.setLevel(logging.ERROR)
     logger = logging.getLogger("cnintendo.run")
-    # Avoid duplicate handlers (important for tests that run multiple invocations)
     logger.handlers = [h for h in logger.handlers if not isinstance(h, logging.FileHandler)]
     logger.addHandler(file_handler)
     logger.setLevel(logging.ERROR)
 
-    items = discover_scans(scans_dir)
-    console.print(f"[bold]Encontrados {len(items)} items en {scans_dir}[/bold]")
+    all_items = discover_scans(scans_dir)
+
+    # En modo retry, filtrar solo los items que fallaron anteriormente
+    failures = _load_failures(data_dir)
+    if retry_failed:
+        if not failures:
+            console.print("[yellow]No hay fallos registrados en run_failures.json.[/yellow]")
+            return
+        items = [i for i in all_items if i.identifier in failures]
+        console.print(f"[bold]Reintentando {len(items)} items fallidos[/bold] (de {len(all_items)} totales)")
+    else:
+        items = all_items
+        console.print(f"[bold]Encontrados {len(items)} items en {scans_dir}[/bold]")
 
     try:
         with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
@@ -68,43 +100,67 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export, with_descr
 
                 progress.update(task, description=f"[cyan]{item.identifier[:40]}[/cyan]")
 
+                # En retry, forzar re-proceso del paso que falló
+                failed_step = failures.get(item.identifier)
+                force_extract  = force or (retry_failed and failed_step == "extract")
+                force_analyze  = force or (retry_failed and failed_step in ("extract", "analyze"))
+                force_summarize = force or (retry_failed and failed_step in ("extract", "analyze", "summarize"))
+                force_describe  = force or (retry_failed and failed_step == "describe")
+
                 # Step 1: Extraer texto desde djvu.txt
-                if not extracted_json.exists() or force:
+                if not extracted_json.exists() or force_extract:
                     try:
                         extracted_data = item.to_extracted_dict()
                         extracted_json.write_text(
                             json.dumps(extracted_data, indent=2, ensure_ascii=False)
                         )
                     except Exception as e:
-                        logger.error(f"{item.identifier} extract: {e}")
+                        msg = f"[extract] {e}"
+                        logger.error(f"{item.identifier} {msg}")
+                        failures[item.identifier] = "extract"
+                        _save_failures(data_dir, failures)
                         progress.advance(task)
                         continue
 
                 # Step 2: analyze
-                if not structured_json.exists() or force:
+                if not structured_json.exists() or force_analyze:
                     try:
                         ctx.invoke(analyze_cmd, extracted_json=extracted_json,
-                                   output=structured_json, force=force, no_clean=False)
+                                   output=structured_json, force=force_analyze, no_clean=False)
                     except (Exception, SystemExit) as e:
-                        logger.error(f"{item.identifier} analyze: {e}")
+                        msg = f"[analyze] {e}"
+                        logger.error(f"{item.identifier} {msg}")
+                        failures[item.identifier] = "analyze"
+                        _save_failures(data_dir, failures)
                         progress.advance(task)
                         continue
 
                 # Step 3: summarize (optional)
-                if with_summarize and structured_json.exists() and (not summary_txt.exists() or force):
+                if with_summarize and structured_json.exists() and (not summary_txt.exists() or force_summarize):
                     try:
                         ctx.invoke(summarize_cmd, structured_json=structured_json,
-                                   output=summary_txt, force=force)
+                                   output=summary_txt, force=force_summarize)
                     except (Exception, SystemExit) as e:
-                        logger.error(f"{item.identifier} summarize: {e}")
+                        msg = f"[summarize] {e}"
+                        logger.error(f"{item.identifier} {msg}")
+                        failures[item.identifier] = "summarize"
+                        _save_failures(data_dir, failures)
 
                 # Step 4: describe images (optional, slow)
-                if with_describe and extracted_json.exists() and (not described_json.exists() or force):
+                if with_describe and extracted_json.exists() and (not described_json.exists() or force_describe):
                     try:
                         ctx.invoke(describe_cmd, extracted_json=extracted_json,
-                                   output=described_json, force=force)
+                                   output=described_json, force=force_describe)
                     except (Exception, SystemExit) as e:
-                        logger.error(f"{item.identifier} describe: {e}")
+                        msg = f"[describe] {e}"
+                        logger.error(f"{item.identifier} {msg}")
+                        failures[item.identifier] = "describe"
+                        _save_failures(data_dir, failures)
+
+                # Item completado: eliminar de fallos si estaba ahí
+                if item.identifier in failures:
+                    del failures[item.identifier]
+                    _save_failures(data_dir, failures)
 
                 progress.advance(task)
 
@@ -117,7 +173,11 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export, with_descr
             except Exception as e:
                 console.print(f"[red]Error en export:[/red] {e}")
 
-        console.print(f"\n[green]Completado.[/green] Errores (si hay): {log_file}")
+        if failures:
+            console.print(f"\n[yellow]Completado con {len(failures)} fallo(s).[/yellow] "
+                          f"Usa --retry-failed para reintentar. Log: {log_file}")
+        else:
+            console.print(f"\n[green]Completado sin errores.[/green]")
     finally:
         logger.removeHandler(file_handler)
         file_handler.close()
@@ -136,14 +196,17 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export, with_descr
               help="Ejecuta descripción de imágenes (requiere modelo de visión, lento).")
 @click.option("--with-summarize/--no-summarize", default=True,
               help="Genera resumen narrativo de cada número.")
+@click.option("--retry-failed", is_flag=True,
+              help="Re-procesa solo los items que fallaron en la última ejecución.")
 def run(ctx: click.Context, pdf_dir: Optional[Path], data_dir: Optional[Path],
         force: bool, skip_export: bool, scans_dir: Optional[Path],
-        with_describe: bool, with_summarize: bool):
+        with_describe: bool, with_summarize: bool, retry_failed: bool):
     """Ejecuta el pipeline completo sobre una carpeta de PDFs."""
     data_dir = data_dir or Path("data")
 
     if scans_dir:
-        _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export, with_describe, with_summarize)
+        _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
+                            with_describe, with_summarize, retry_failed)
         return
 
     if pdf_dir is None:
