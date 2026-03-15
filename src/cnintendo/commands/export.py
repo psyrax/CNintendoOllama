@@ -9,6 +9,14 @@ import sqlite_utils
 from cnintendo.models import IssueData
 
 
+ALL_ISSUE_COLS = {
+    "number": int, "year": int, "month": str, "type": str,
+    "ia_title": str, "ia_subjects": str, "ia_date": str,
+    "ia_identifier": str, "summary": str,
+}
+ALL_IMAGE_COLS = {"path": str, "description": str}
+
+
 def _create_schema(db: sqlite_utils.Database) -> None:
     """Crea las tablas si no existen."""
     existing = set(db.table_names())
@@ -22,6 +30,11 @@ def _create_schema(db: sqlite_utils.Database) -> None:
             "month": str,
             "pages": int,
             "type": str,
+            "ia_title": str,
+            "ia_subjects": str,
+            "ia_date": str,
+            "ia_identifier": str,
+            "summary": str,
         }, pk="id", if_not_exists=True)
 
     if "games" not in existing:
@@ -53,7 +66,22 @@ def _create_schema(db: sqlite_utils.Database) -> None:
             "id": int,
             "article_id": int,
             "path": str,
+            "description": str,
         }, pk="id", foreign_keys=[("article_id", "articles", "id")], if_not_exists=True)
+
+
+def _migrate_schema(db: sqlite_utils.Database) -> None:
+    """Agrega columnas nuevas a tablas existentes si no existen."""
+    if "issues" in db.table_names():
+        existing_cols = {col.name for col in db["issues"].columns}
+        for col_name, col_type in ALL_ISSUE_COLS.items():
+            if col_name not in existing_cols:
+                db["issues"].add_column(col_name, col_type)
+    if "images" in db.table_names():
+        existing_cols = {col.name for col in db["images"].columns}
+        for col_name, col_type in ALL_IMAGE_COLS.items():
+            if col_name not in existing_cols:
+                db["images"].add_column(col_name, col_type)
 
 
 def _get_or_create_game(db: sqlite_utils.Database, name: str, platform: Optional[str]) -> int:
@@ -82,6 +110,7 @@ def export(input_dir: Path, db: Path):
 
     database = sqlite_utils.Database(db)
     _create_schema(database)
+    _migrate_schema(database)
 
     total_issues = 0
     total_articles = 0
@@ -94,14 +123,26 @@ def export(input_dir: Path, db: Path):
             click.echo(f"  ✗ {json_file.name}: {e}", err=True)
             continue
 
+        # Load descriptions from _described.json if it exists
+        described_file = json_file.parent / json_file.name.replace("_structured.json", "_described.json")
+        descriptions: dict[str, str] = {}
+        if described_file.exists():
+            try:
+                descriptions = json.loads(described_file.read_text())
+            except Exception:
+                pass
+
         issue_row = issue_data.issue.model_dump()
-        issue_row.pop("id")
+        issue_row.pop("id", None)
+        # Serialize ia_subjects as JSON string
+        issue_row["ia_subjects"] = json.dumps(issue_row.get("ia_subjects") or [])
+        issue_row["summary"] = issue_data.summary
         database["issues"].insert(issue_row)
         issue_id = database.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         for article in issue_data.articles:
             article_row = article.model_dump()
-            images = article_row.pop("images", [])
+            images = article_row.pop("images", [])  # images is list[dict] now
 
             game_id = None
             if article_row.get("game"):
@@ -114,8 +155,13 @@ def export(input_dir: Path, db: Path):
             database["articles"].insert(article_row)
             article_id = database.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-            for img_path in images:
-                database["images"].insert({"article_id": article_id, "path": img_path})
+            for img_info in images:
+                # img_info is a dict from model_dump(); get path and description
+                img_path = img_info["path"] if isinstance(img_info, dict) else img_info
+                img_desc = img_info.get("description") if isinstance(img_info, dict) else None
+                # _described.json takes priority over ImageInfo.description
+                desc = descriptions.get(img_path) or img_desc
+                database["images"].insert({"article_id": article_id, "path": img_path, "description": desc})
 
             total_articles += 1
 
