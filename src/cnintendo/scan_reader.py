@@ -24,12 +24,10 @@ def parse_djvu_text(content: str) -> list[dict]:
         return []
     raw_pages = content.split("\x0c")
     pages = []
-    page_number = 1
-    for raw in raw_pages:
+    for physical_page, raw in enumerate(raw_pages, start=1):
         text = raw.strip()
         if text:
-            pages.append({"page_number": page_number, "text": text})
-            page_number += 1
+            pages.append({"page_number": physical_page, "text": text})
     return pages
 
 
@@ -40,7 +38,7 @@ class ScanItem:
     pdf: Path
     djvu_txt: Path
     meta_xml: Path
-    _meta_cache: dict = field(default_factory=dict, repr=False)
+    _meta_cache: dict = field(default_factory=dict, repr=False, init=False)
 
     @property
     def meta(self) -> dict:
@@ -49,7 +47,9 @@ class ScanItem:
         return self._meta_cache
 
     def to_extracted_dict(self) -> dict:
-        """Genera el dict compatible con el formato _extracted.json del pipeline."""
+        """Genera el dict compatible con el formato _extracted.json del pipeline.
+        Incluye campos extra de IA (ia_title, ia_date, ia_subjects, ia_identifier)
+        no presentes en el formato base de extract.py — el downstream los ignora si no los usa."""
         content = self.djvu_txt.read_text(encoding="utf-8", errors="replace")
         pages = parse_djvu_text(content)
         meta = self.meta
@@ -76,11 +76,16 @@ def discover_scans(scans_dir: Path) -> list[ScanItem]:
         # Buscar archivos requeridos
         djvu_files = list(subdir.glob("*_djvu.txt"))
         meta_files = list(subdir.glob(f"{identifier}_meta.xml"))
-        pdf_files = list(subdir.glob("*.pdf"))
-        # Excluir _text.pdf (versión de texto del IA, no el scan original)
-        pdf_files = [p for p in pdf_files if not p.name.endswith("_text.pdf")]
+        pdf_files = sorted(p for p in subdir.glob("*.pdf") if not p.name.endswith("_text.pdf"))
 
         if not djvu_files or not meta_files or not pdf_files:
+            continue
+
+        try:
+            parse_meta_xml(meta_files[0])
+        except ET.ParseError as exc:
+            import warnings
+            warnings.warn(f"Skipping {identifier}: malformed XML in {meta_files[0]}: {exc}")
             continue
 
         items.append(ScanItem(
