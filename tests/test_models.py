@@ -87,3 +87,10 @@ def test_issue_data_summary_optional():
     m = IssueMetadata(filename="test.pdf", pages=10)
     d = IssueData(issue=m)
     assert d.summary is None
+
+
+def test_article_images_coerces_strings():
+    a = Article(page=1, images=["img.png", "img2.png"])
+    assert len(a.images) == 2
+    assert a.images[0].path == "img.png"
+    assert a.images[0].description is None

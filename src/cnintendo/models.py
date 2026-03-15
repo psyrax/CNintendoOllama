@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class IssueMetadata(BaseModel):
@@ -18,7 +18,7 @@ class IssueMetadata(BaseModel):
 
 
 class ImageInfo(BaseModel):
-    path: str
+    path: str = Field(..., min_length=1)
     description: Optional[str] = None
 
 
@@ -31,6 +31,17 @@ class Article(BaseModel):
     score: Optional[float] = None
     text: Optional[str] = None
     images: list[ImageInfo] = Field(default_factory=list)
+
+    @field_validator("images", mode="before")
+    @classmethod
+    def coerce_images(cls, v: list) -> list:
+        result = []
+        for item in v:
+            if isinstance(item, str):
+                result.append({"path": item, "description": None})
+            else:
+                result.append(item)
+        return result
 
 
 class IssueData(BaseModel):
