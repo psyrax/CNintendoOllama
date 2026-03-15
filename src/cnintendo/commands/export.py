@@ -97,7 +97,7 @@ def _get_or_create_game(db: sqlite_utils.Database, name: str, platform: Optional
 
 
 def _date_sort_key(path: Path) -> tuple[int, int]:
-    """Extract year and month from ia_date field for sorting chronologically."""
+    """Extrae año y mes del campo ia_date para ordenar cronológicamente."""
     try:
         raw = json.loads(path.read_text())
         date = raw.get("issue", {}).get("ia_date", "") or ""

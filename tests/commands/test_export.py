@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 from click.testing import CliRunner
 from cnintendo.cli import main
+from cnintendo.commands.export import _date_sort_key
 
 
 SAMPLE_STRUCTURED = {
@@ -102,9 +103,6 @@ def test_export_skips_bad_json(tmp_path):
     articles = conn.execute("SELECT title FROM articles").fetchall()
     conn.close()
     assert len(articles) == 1  # only the valid file was processed
-
-
-from cnintendo.commands.export import _date_sort_key
 
 
 def test_date_sort_key_year_and_month(tmp_path):
