@@ -138,6 +138,41 @@ def _process_item(
     return pages_json
 
 
+def _reprocess_single_page(pages_json: Path, page_number: int, item_dir: Path, client: OllamaClient) -> None:
+    """Reprocesa solo una página en un _pages.json existente, actualizando su campo llm in-place."""
+    data = json.loads(pages_json.read_text())
+    pages = data.get("pages", [])
+
+    page = next((p for p in pages if p["page_number"] == page_number), None)
+    if page is None:
+        raise click.ClickException(f"Página {page_number} no encontrada en {pages_json.name}")
+
+    img_path_str = page.get("image_path")
+    if not img_path_str:
+        raise click.ClickException(f"Página {page_number} no tiene image_path — no se puede reprocesar")
+
+    if not client.process_prompt_id:
+        raise click.ClickException("OPENAI_PROMPT_ID_PROCESS no está configurado")
+
+    img_full = item_dir / img_path_str
+    if not img_full.exists():
+        raise click.ClickException(f"Imagen no encontrada: {img_full}")
+
+    djvu_text = page.get("djvu_text")
+    user_text = (
+        f"Texto DJVU de esta página:\n{djvu_text}\n\nResponde en JSON."
+        if djvu_text
+        else "Analiza esta página y responde en JSON."
+    )
+
+    raw = client.generate_vision(user_text, img_full, prompt_id=client.process_prompt_id, task="process")
+    llm_response = _parse_llm_json(raw)
+    page["llm"] = llm_response
+
+    pages_json.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    click.echo(f"Página {page_number} actualizada → llm={'OK' if llm_response else 'null (respuesta inválida)'}", err=True)
+
+
 @click.command("process")
 @click.argument("scan_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--output", "-o", type=click.Path(path_type=Path), default=None,
@@ -145,7 +180,9 @@ def _process_item(
 @click.option("--force", is_flag=True, help="Reprocesar aunque ya exista el archivo.")
 @click.option("--start-page", default=1, show_default=True,
               help="Página desde la que comenzar (útil para reanudar).")
-def process(scan_dir: Path, output: Optional[Path], force: bool, start_page: int):
+@click.option("--page", "single_page", default=None, type=int,
+              help="Reprocesar solo esta página en el JSON existente (sin tocar las demás).")
+def process(scan_dir: Path, output: Optional[Path], force: bool, start_page: int, single_page: Optional[int]):
     """Procesa un directorio de escaneo con visión LLM página por página."""
     output_dir = output or scan_dir.parent / "output"
     client = OllamaClient()
@@ -179,5 +216,17 @@ def process(scan_dir: Path, output: Optional[Path], force: bool, start_page: int
         scandata_xml=scandata_files[0] if scandata_files else None,
         meta_xml=meta_files[0],
     )
+
+    if single_page is not None:
+        # Modo parche: solo reprocesar una página del JSON existente
+        stem = item.canonical_stem
+        item_dir = output_dir / item.output_subdir
+        pages_json = item_dir / f"{stem}_pages.json"
+        if not pages_json.exists():
+            click.echo(f"No existe {pages_json} — corré sin --page primero para generar el archivo.", err=True)
+            raise SystemExit(1)
+        _reprocess_single_page(pages_json, single_page, item_dir, client)
+        return
+
     pages_json = _process_item(item, output_dir, client, force=force, start_page=start_page)
     click.echo(f"Procesado: {pages_json}", err=True)
