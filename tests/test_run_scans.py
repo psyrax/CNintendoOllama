@@ -96,3 +96,46 @@ def test_run_scans_idempotent(tmp_path):
 
     assert result.exit_code == 0
     assert call_count == 0  # No llamadas a Ollama porque ya existe
+
+
+def test_run_scans_uses_process_when_prompt_set(tmp_path, monkeypatch):
+    """When OPENAI_PROMPT_ID_PROCESS is set, _process_item should be called."""
+    monkeypatch.setenv("OPENAI_PROMPT_ID_PROCESS", "pmpt_abc123")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    # Create a minimal scan structure
+    scan_dir = tmp_path / "ClubTest"
+    scan_dir.mkdir()
+    (scan_dir / "ClubTest_meta.xml").write_text(
+        "<metadata><identifier>ClubTest</identifier><title>Club Nintendo Año 01 Nº 01 (México)</title><date>1991-01</date></metadata>"
+    )
+    (scan_dir / "ClubTest.pdf").write_bytes(b"")
+    (scan_dir / "ClubTest_djvu.txt").write_text("page1\x0cpage2")
+    (scan_dir / "ClubTest_scandata.xml").write_text(
+        "<book><bookData><leafCount>2</leafCount></bookData><pageData>"
+        "<page leafNum='0'><pageType>Title</pageType></page>"
+        "<page leafNum='1'><pageType>Normal</pageType></page>"
+        "</pageData></book>"
+    )
+
+    data_dir = tmp_path / "data"
+
+    from unittest.mock import patch, MagicMock
+    from click.testing import CliRunner
+    from cnintendo.cli import main
+
+    with patch("cnintendo.commands.run._process_item") as mock_process:
+        # Make the mock return a valid pages.json path
+        pages_json = data_dir / "1991" / "01" / "club-nintendo_1991-01_a01-n01_pages.json"
+        pages_json.parent.mkdir(parents=True, exist_ok=True)
+        pages_json.write_text('{"ia_identifier": "ClubTest", "canonical_stem": "club-nintendo_1991-01_a01-n01", "filename": "ClubTest.pdf", "total_pages": 2, "pages": [], "ia_subjects": []}')
+        mock_process.return_value = pages_json
+
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "run", "--scans-dir", str(tmp_path), "--data-dir", str(data_dir),
+            "--skip-export"
+        ])
+
+    assert mock_process.called, f"_process_item should have been called. Output: {result.output}"

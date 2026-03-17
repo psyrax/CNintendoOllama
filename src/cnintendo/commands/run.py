@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.progress import track
 
 from cnintendo.commands.inspect import _detect_pdf_type, _infer_issue_number
+from cnintendo.commands.process import _process_item
 from cnintendo.models import IssueMetadata
 
 console = Console(stderr=True)
@@ -58,7 +59,11 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
     from cnintendo.commands.summarize import summarize as summarize_cmd
     from cnintendo.commands.describe import describe as describe_cmd
     from cnintendo.commands.export import export as export_cmd
+    from cnintendo.ollama_client import OllamaClient
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+
+    ollama_client = OllamaClient()
+    use_process_pipeline = bool(ollama_client.process_prompt_id)
 
     extracted_dir = data_dir / "extracted"
     extracted_dir.mkdir(parents=True, exist_ok=True)
@@ -92,13 +97,31 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
             task = progress.add_task("Procesando...", total=len(items))
 
             for item in items:
-                stem = item.pdf.stem
-                extracted_json = extracted_dir / f"{stem}_extracted.json"
-                structured_json = extracted_dir / f"{stem}_structured.json"
-                summary_txt = extracted_dir / f"{stem}_summary.txt"
-                described_json = extracted_dir / f"{stem}_described.json"
+                stem = item.canonical_stem
+                item_dir = extracted_dir / item.output_subdir
+                item_dir.mkdir(parents=True, exist_ok=True)
+                extracted_json = item_dir / f"{stem}_extracted.json"
+                structured_json = item_dir / f"{stem}_structured.json"
+                summary_txt = item_dir / f"{stem}_summary.txt"
+                described_json = item_dir / f"{stem}_described.json"
 
                 progress.update(task, description=f"[cyan]{item.identifier[:40]}[/cyan]")
+
+                if use_process_pipeline:
+                    try:
+                        pages_json = _process_item(item, extracted_dir, ollama_client, force=force, start_page=1)
+                        progress.update(task, description=f"[cyan]{item.identifier[:40]}[/cyan]")
+                        if item.identifier in failures:
+                            del failures[item.identifier]
+                            _save_failures(data_dir, failures)
+                    except Exception as e:
+                        msg = f"[process] {e}"
+                        logger.error(f"{item.identifier} {msg}")
+                        failures[item.identifier] = "process"
+                        _save_failures(data_dir, failures)
+                    finally:
+                        progress.advance(task)
+                    continue  # Skip the old OCR pipeline
 
                 # En retry, forzar re-proceso del paso que falló
                 failed_step = failures.get(item.identifier)
@@ -107,10 +130,29 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
                 force_summarize = force or (retry_failed and failed_step in ("extract", "analyze", "summarize"))
                 force_describe  = force or (retry_failed and failed_step == "describe")
 
-                # Step 1: Extraer texto desde djvu.txt
+                # Step 1: Extraer texto (tesseract) + limpiar OCR (gemma3n) + guardar por página
                 if not extracted_json.exists() or force_extract:
                     try:
-                        extracted_data = item.to_extracted_dict()
+                        images_dir = item_dir / "images" / stem
+                        extracted_data = item.to_extracted_dict(
+                            images_dir=images_dir, base_dir=item_dir,
+                            client=ollama_client
+                        )
+                        # Guardar JSON por página
+                        for page in extracted_data.get("pages", []):
+                            pn = page["page_number"]
+                            page_json = item_dir / f"page_{pn:04d}.json"
+                            page_out = {
+                                "issue": stem,
+                                "page_number": pn,
+                                "text_ocr": page.get("text_ocr", ""),
+                                "image": page.get("images", [None])[0],
+                            }
+                            if "text_clean" in page:
+                                page_out["text_clean"] = page["text_clean"]
+                            page_json.write_text(
+                                json.dumps(page_out, indent=2, ensure_ascii=False)
+                            )
                         extracted_json.write_text(
                             json.dumps(extracted_data, indent=2, ensure_ascii=False)
                         )
