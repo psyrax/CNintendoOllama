@@ -81,3 +81,27 @@ def test_is_available_returns_false_on_os_error(monkeypatch):
     )
     client = OllamaClient()
     assert client.is_available() is False
+
+
+def test_process_prompt_id_from_env(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_PROMPT_ID_PROCESS", "pmpt_abc123")
+    monkeypatch.setenv("OPENAI_PROMPT_VERSION_PROCESS", "42")
+    import importlib
+    import cnintendo.ollama_client as mod
+    importlib.reload(mod)
+    client = mod.OllamaClient()
+    assert client.process_prompt_id == "pmpt_abc123"
+    assert client._prompt_versions.get("process") == "42"
+
+
+def test_process_prompt_id_defaults_none(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.delenv("OPENAI_PROMPT_ID_PROCESS", raising=False)
+    import importlib
+    import cnintendo.ollama_client as mod
+    importlib.reload(mod)
+    client = mod.OllamaClient()
+    assert client.process_prompt_id is None
