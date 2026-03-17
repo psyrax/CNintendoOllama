@@ -177,6 +177,24 @@ def test_parse_meta_xml_new_fields():
         os.unlink(path)
 
 
+def test_scan_item_discovers_scandata(tmp_path):
+    from cnintendo.scan_reader import ScanItem, discover_scans
+    scan_dir = tmp_path / "ClubTest"
+    scan_dir.mkdir()
+    (scan_dir / "ClubTest_meta.xml").write_text(
+        "<metadata><identifier>ClubTest</identifier><title>T</title><date>1991-01</date></metadata>"
+    )
+    (scan_dir / "ClubTest.pdf").write_bytes(b"")
+    (scan_dir / "ClubTest_djvu.txt").write_text("page1\x0cpage2")
+    (scan_dir / "ClubTest_scandata.xml").write_text(
+        "<book><bookData><leafCount>10</leafCount></bookData><pageData></pageData></book>"
+    )
+    items = discover_scans(tmp_path)
+    assert len(items) == 1
+    assert items[0].scandata_xml is not None
+    assert items[0].scandata_xml.name == "ClubTest_scandata.xml"
+
+
 def test_parse_scandata_xml():
     from cnintendo.scan_reader import parse_scandata_xml
     xml = """<book>

@@ -219,6 +219,7 @@ class ScanItem:
     djvu_xml: Path | None
     djvu_txt: Path | None
     jp2_zip: Path | None
+    scandata_xml: Path | None
     meta_xml: Path
     _meta_cache: dict = field(default_factory=dict, repr=False, init=False)
 
@@ -327,6 +328,7 @@ def discover_scans(scans_dir: Path) -> list[ScanItem]:
         djvu_xml_files = list(subdir.glob("*_djvu.xml"))
         djvu_txt_files = list(subdir.glob("*_djvu.txt"))
         jp2_zip_files = list(subdir.glob("*_jp2.zip"))
+        scandata_files = list(subdir.glob("*_scandata.xml"))
 
         # Requiere jp2.zip o pdf para OCR
         if not jp2_zip_files and not pdf_files:
@@ -339,6 +341,7 @@ def discover_scans(scans_dir: Path) -> list[ScanItem]:
             djvu_xml=djvu_xml_files[0] if djvu_xml_files else None,
             djvu_txt=djvu_txt_files[0] if djvu_txt_files else None,
             jp2_zip=jp2_zip_files[0] if jp2_zip_files else None,
+            scandata_xml=scandata_files[0] if scandata_files else None,
             meta_xml=meta_files[0],
         ))
     return items
