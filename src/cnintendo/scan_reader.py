@@ -51,10 +51,8 @@ def parse_meta_xml(meta_file: Path) -> dict:
     import re as _re_local
     desc_el = root.find("description")
     if desc_el is not None:
-        desc_raw = ET.tostring(desc_el, encoding="unicode", method="xml")
-        # Remove outer <description>...</description> wrapper
-        desc_raw = _re_local.sub(r'^<description[^>]*>', '', desc_raw).rstrip()
-        desc_raw = _re_local.sub(r'</description>$', '', desc_raw)
+        # Recopilar todo el texto: texto directo + texto de hijos (tail incluido)
+        desc_raw = "".join(desc_el.itertext())
         description = _re_local.sub(r'<[^>]+>', ' ', desc_raw).strip()
         description = _re_local.sub(r'\s+', ' ', description).strip() or None
     else:
