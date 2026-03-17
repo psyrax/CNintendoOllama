@@ -1,5 +1,5 @@
 import pytest
-from cnintendo.models import Article, ImageInfo, IssueData, IssueMetadata
+from cnintendo.models import Article, ImageInfo, IssueData, IssueMetadata, PageProcessed, IssuePages
 
 
 def test_issue_metadata_defaults():
@@ -94,3 +94,50 @@ def test_article_images_coerces_strings():
     assert len(a.images) == 2
     assert a.images[0].path == "img.png"
     assert a.images[0].description is None
+
+
+def test_page_processed_minimal():
+    p = PageProcessed(page_number=1)
+    assert p.image_path is None
+    assert p.djvu_text is None
+    assert p.llm is None
+
+
+def test_page_processed_with_llm():
+    p = PageProcessed(
+        page_number=3,
+        image_path="2005/08/images/page_0003.jpg",
+        djvu_text="Mario Kart DS review...",
+        page_type_scandata="Normal",
+        llm={"page_type": "review", "game": "Mario Kart DS", "score": 9.0}
+    )
+    assert p.llm["game"] == "Mario Kart DS"
+    assert p.page_type_scandata == "Normal"
+
+
+def test_issue_pages_minimal():
+    issue = IssuePages(
+        ia_identifier="ClubTest",
+        canonical_stem="club-nintendo_1991-01_a01-n01",
+        filename="test.pdf",
+        total_pages=0,
+    )
+    assert issue.pages == []
+    assert issue.ia_subjects == []
+
+
+def test_issue_pages_full():
+    issue = IssuePages(
+        ia_identifier="ClubNintendoMxicoAAo14N08",
+        ia_title="Club Nintendo Año 14 N° 08 (México)",
+        ia_date="2005-08",
+        ia_description="Club Nintendo Año 14 N° 8 — Agosto de 2005",
+        ia_clubnintendo="No1408",
+        ia_subjects=["videojuegos", "nintendo"],
+        canonical_stem="club-nintendo_2005-08_a14-n08",
+        filename="Club Nintendo.pdf",
+        total_pages=80,
+        pages=[PageProcessed(page_number=1, llm={"summary": "Portada"})]
+    )
+    assert len(issue.pages) == 1
+    assert issue.ia_clubnintendo == "No1408"
