@@ -28,7 +28,10 @@ def _parse_llm_json(raw: str) -> dict | None:
         text = fence_match.group(1)
     try:
         result = json.loads(text)
-        return result if isinstance(result, dict) else None
+        if isinstance(result, dict):
+            result.pop("page_number", None)
+            return result
+        return None
     except json.JSONDecodeError:
         return None
 
