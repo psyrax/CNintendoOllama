@@ -6,7 +6,7 @@ from typing import Optional
 import click
 import sqlite_utils
 
-from cnintendo.models import IssueData
+from cnintendo.models import IssueData, IssuePages
 
 
 ALL_ISSUE_COLS = {
@@ -69,6 +69,17 @@ def _create_schema(db: sqlite_utils.Database) -> None:
             "description": str,
         }, pk="id", foreign_keys=[("article_id", "articles", "id")], if_not_exists=True)
 
+    if "pages" not in existing:
+        db["pages"].create({
+            "id": int,
+            "issue_id": int,
+            "page_number": int,
+            "image_path": str,
+            "djvu_text": str,
+            "page_type": str,
+            "llm_json": str,
+        }, pk="id", foreign_keys=[("issue_id", "issues", "id")], if_not_exists=True)
+
 
 def _migrate_schema(db: sqlite_utils.Database) -> None:
     """Agrega columnas nuevas a tablas existentes si no existen."""
@@ -82,6 +93,17 @@ def _migrate_schema(db: sqlite_utils.Database) -> None:
         for col_name, col_type in ALL_IMAGE_COLS.items():
             if col_name not in existing_cols:
                 db["images"].add_column(col_name, col_type)
+    # Add pages table if it doesn't exist in older DBs
+    if "pages" not in db.table_names():
+        db["pages"].create({
+            "id": int,
+            "issue_id": int,
+            "page_number": int,
+            "image_path": str,
+            "djvu_text": str,
+            "page_type": str,
+            "llm_json": str,
+        }, pk="id", foreign_keys=[("issue_id", "issues", "id")], if_not_exists=True)
 
 
 def _get_or_create_game(db: sqlite_utils.Database, name: str, platform: Optional[str]) -> int:
@@ -100,7 +122,8 @@ def _date_sort_key(path: Path) -> tuple[int, int]:
     """Extrae año y mes del campo ia_date para ordenar cronológicamente."""
     try:
         raw = json.loads(path.read_text())
-        date = raw.get("issue", {}).get("ia_date", "") or ""
+        # Support both _pages.json (ia_date top level) and _structured.json (issue.ia_date)
+        date = raw.get("ia_date") or raw.get("issue", {}).get("ia_date", "") or ""
         parts = date.split("-")
         year = int(parts[0]) if parts and parts[0].isdigit() else 9999
         month = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
@@ -109,16 +132,82 @@ def _date_sort_key(path: Path) -> tuple[int, int]:
         return (9999, 0)
 
 
+def _export_pages_file(pages_file: Path, database: sqlite_utils.Database) -> tuple[int, int]:
+    """Exports a _pages.json file. Returns (issues_count, articles_count)."""
+    raw = json.loads(pages_file.read_text())
+    issue_pages = IssuePages(**raw)
+
+    # Insert issue
+    issue_row = {
+        "filename": issue_pages.filename,
+        "pages": issue_pages.total_pages,
+        "type": "scanned",
+        "ia_title": issue_pages.ia_title,
+        "ia_date": issue_pages.ia_date,
+        "ia_identifier": issue_pages.ia_identifier,
+        "ia_subjects": json.dumps(issue_pages.ia_subjects or []),
+    }
+    database["issues"].insert(issue_row)
+    issue_id = database.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    articles_count = 0
+    for page in issue_pages.pages:
+        llm = page.llm or {}
+        # Insert page
+        database["pages"].insert({
+            "issue_id": issue_id,
+            "page_number": page.page_number,
+            "image_path": page.image_path,
+            "djvu_text": page.djvu_text,
+            "page_type": page.page_type_scandata,
+            "llm_json": json.dumps(llm) if llm else None,
+        })
+        # Insert article for content pages
+        page_type = llm.get("page_type") if llm else None
+        if page_type in ("review", "preview", "news", "editorial"):
+            article_row = {
+                "issue_id": issue_id,
+                "game_id": None,
+                "page": page.page_number,
+                "section": page_type,
+                "title": None,
+                "game": llm.get("game"),
+                "platform": llm.get("platform"),
+                "score": llm.get("score"),
+                "text": llm.get("summary"),
+            }
+            game_name = llm.get("game")
+            if game_name:
+                article_row["game_id"] = _get_or_create_game(
+                    database, game_name, llm.get("platform")
+                )
+            database["articles"].insert(article_row)
+            articles_count += 1
+
+    return 1, articles_count
+
+
 @click.command()
-@click.option("--input-dir", "-i", type=click.Path(path_type=Path),
-              default=Path("data/extracted"), show_default=True)
+@click.argument("input_dir", type=click.Path(path_type=Path), required=False, default=None)
+@click.option("--input-dir", "-i", "input_dir_opt", type=click.Path(path_type=Path),
+              default=None, help="Directorio de entrada (alternativa al argumento posicional)")
 @click.option("--db", type=click.Path(path_type=Path),
               default=Path("data/output.db"), show_default=True)
-def export(input_dir: Path, db: Path):
-    """Exporta JSONs estructurados a una base de datos SQLite."""
-    json_files = sorted(input_dir.glob("*_structured.json"), key=_date_sort_key)
-    if not json_files:
-        click.echo(f"No se encontraron archivos *_structured.json en {input_dir}", err=True)
+def export(input_dir: Path, input_dir_opt: Path, db: Path):
+    """Exporta JSONs a una base de datos SQLite."""
+    effective_input_dir = input_dir or input_dir_opt or Path("data/extracted")
+
+    # Find pages.json files first (new pipeline output)
+    pages_files = sorted(effective_input_dir.rglob("*_pages.json"), key=_date_sort_key)
+    # Find structured.json files, excluding ones that have a corresponding pages file
+    pages_stems = {f.name.replace("_pages.json", "") for f in pages_files}
+    structured_files = [
+        f for f in sorted(effective_input_dir.rglob("*_structured.json"), key=_date_sort_key)
+        if f.name.replace("_structured.json", "") not in pages_stems
+    ]
+
+    if not pages_files and not structured_files:
+        click.echo(f"No se encontraron archivos JSON en {effective_input_dir}", err=True)
         return
 
     database = sqlite_utils.Database(db)
@@ -128,7 +217,16 @@ def export(input_dir: Path, db: Path):
     total_issues = 0
     total_articles = 0
 
-    for json_file in json_files:
+    for json_file in pages_files:
+        try:
+            issues, articles = _export_pages_file(json_file, database)
+            total_issues += issues
+            total_articles += articles
+            click.echo(f"  ✓ {json_file.name}", err=True)
+        except Exception as e:
+            click.echo(f"  ✗ {json_file.name}: {e}", err=True)
+
+    for json_file in structured_files:
         try:
             raw = json.loads(json_file.read_text())
             issue_data = IssueData(**raw)
@@ -142,6 +240,14 @@ def export(input_dir: Path, db: Path):
         if described_file.exists():
             try:
                 descriptions = json.loads(described_file.read_text())
+            except Exception:
+                pass
+
+        # Load summary from _summary.txt if it exists (takes priority over structured JSON)
+        summary_file = json_file.with_name(json_file.name.replace("_structured.json", "_summary.txt"))
+        if summary_file.exists():
+            try:
+                issue_data.summary = summary_file.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
 
