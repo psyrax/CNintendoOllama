@@ -72,6 +72,21 @@ def parse_meta_xml(meta_file: Path) -> dict:
     }
 
 
+def parse_scandata_xml(scandata_file: Path) -> dict:
+    """Parsea _scandata.xml. Retorna leaf_count y page_types {page_number: type}."""
+    tree = ET.parse(scandata_file)
+    root = tree.getroot()
+    leaf_count_el = root.find(".//leafCount")
+    leaf_count = int(leaf_count_el.text) if leaf_count_el is not None else 0
+    page_types: dict[int, str] = {}
+    for page_el in root.findall(".//page"):
+        leaf_num = page_el.get("leafNum")
+        page_type = page_el.findtext("pageType", "Normal")
+        if leaf_num is not None:
+            page_types[int(leaf_num) + 1] = page_type  # 1-indexed
+    return {"leaf_count": leaf_count, "page_types": page_types}
+
+
 CLEAN_OCR_PROMPT = (
     "Eres un corrector de OCR para revistas en español de los años 90. "
     "Corrige errores de reconocimiento de caracteres (letras confundidas, palabras rotas, símbolos extraños). "

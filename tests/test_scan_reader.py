@@ -175,3 +175,26 @@ def test_parse_meta_xml_new_fields():
         assert "<div>" not in result["description"]
     finally:
         os.unlink(path)
+
+
+def test_parse_scandata_xml():
+    from cnintendo.scan_reader import parse_scandata_xml
+    xml = """<book>
+      <bookData><leafCount>3</leafCount></bookData>
+      <pageData>
+        <page leafNum="0"><pageType>Title</pageType></page>
+        <page leafNum="1"><pageType>Normal</pageType></page>
+        <page leafNum="2"><pageType>Normal</pageType></page>
+      </pageData>
+    </book>"""
+    import tempfile, os
+    from pathlib import Path
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+        f.write(xml)
+        path = Path(f.name)
+    try:
+        result = parse_scandata_xml(path)
+        assert result["leaf_count"] == 3
+        assert result["page_types"] == {1: "Title", 2: "Normal", 3: "Normal"}
+    finally:
+        os.unlink(path)
