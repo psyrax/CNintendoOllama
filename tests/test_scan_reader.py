@@ -152,3 +152,26 @@ def test_date_sort_key_no_date(tmp_path):
 def test_date_sort_key_empty_date(tmp_path):
     item = _make_scan_item(tmp_path, "Test05", META_EMPTY_DATE)
     assert item.date_sort_key == (9999, 0)
+
+
+def test_parse_meta_xml_new_fields():
+    xml = """<metadata>
+      <identifier>ClubNintendoMxicoAAo14N08</identifier>
+      <title>Club Nintendo Año 14 N° 08 (México)</title>
+      <date>2005-08</date>
+      <subject>Mario</subject>
+      <clubnintendo>No1408</clubnintendo>
+      <description>Club Nintendo Año 14 N° 8 (México)<div>Agosto de 2005</div></description>
+    </metadata>"""
+    import tempfile, os
+    from pathlib import Path
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as f:
+        f.write(xml)
+        path = Path(f.name)
+    try:
+        result = parse_meta_xml(path)
+        assert result["clubnintendo"] == "No1408"
+        assert "Agosto de 2005" in result["description"]
+        assert "<div>" not in result["description"]
+    finally:
+        os.unlink(path)
