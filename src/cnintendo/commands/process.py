@@ -96,8 +96,15 @@ def _process_item(
             img_full = item_dir / img_path_str
             if img_full.exists():
                 try:
+                    # OpenAI json_object format requiere la palabra "json" en el input.
+                    # Pasamos el djvu_text como contexto si está disponible.
+                    user_text = (
+                        f"Texto DJVU de esta página:\n{djvu_text}\n\nResponde en JSON."
+                        if djvu_text
+                        else "Analiza esta página y responde en JSON."
+                    )
                     raw = client.generate_vision(
-                        "",
+                        user_text,
                         img_full,
                         prompt_id=client.process_prompt_id,
                         task="process",
