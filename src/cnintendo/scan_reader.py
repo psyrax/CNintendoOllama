@@ -87,6 +87,20 @@ def parse_scandata_xml(scandata_file: Path) -> dict:
     return {"leaf_count": leaf_count, "page_types": page_types}
 
 
+def parse_djvu_text(content: str | Path) -> list[dict]:
+    """Parsea _djvu.txt separando por form-feed \\x0c.
+    Retorna [{"page_number": 1, "text": "..."}, ...] filtrando páginas vacías."""
+    if isinstance(content, Path):
+        content = content.read_text(encoding="utf-8", errors="replace")
+    segments = content.split("\x0c")
+    result = []
+    for i, seg in enumerate(segments):
+        stripped = seg.strip()
+        if stripped:
+            result.append({"page_number": i + 1, "text": stripped})
+    return result
+
+
 CLEAN_OCR_PROMPT = (
     "Eres un corrector de OCR para revistas en español de los años 90. "
     "Corrige errores de reconocimiento de caracteres (letras confundidas, palabras rotas, símbolos extraños). "
@@ -267,6 +281,14 @@ class ScanItem:
                 text_source = "tesseract_pdf"
             except Exception as e:
                 warnings.warn(f"{self.identifier}: error en OCR PDF: {e}")
+
+        # Fallback: usar djvu_txt si no hay OCR disponible
+        if not pages and self.djvu_txt and self.djvu_txt.exists():
+            try:
+                pages = parse_djvu_text(self.djvu_txt)
+                text_source = "djvu"
+            except Exception as e:
+                warnings.warn(f"{self.identifier}: error leyendo djvu_txt: {e}")
 
         return {
             "filename": self.pdf.name,
