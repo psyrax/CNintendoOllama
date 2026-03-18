@@ -52,15 +52,116 @@ def _save_failures(data_dir: Path, failures: dict[str, str]) -> None:
         failures_file.unlink()
 
 
+def _build_run_display(
+    total_items: int,
+    done_items: int,
+    current_issue: str,
+    page_done: int,
+    page_total: int,
+    issue_log: list[dict],
+    global_stats: dict,
+    start_ts: float,
+) -> "rich.console.RenderableType":
+    import time as _time
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich import box
+    from rich.console import Group
+
+    elapsed = _time.monotonic() - start_ts
+    eta_str = "—"
+    if done_items > 0 and done_items < total_items:
+        secs_left = int((elapsed / done_items) * (total_items - done_items))
+        h, rem = divmod(secs_left, 3600)
+        m, s = divmod(rem, 60)
+        eta_str = f"{h}h {m:02d}m" if h else f"{m}m {s:02d}s"
+
+    pct = int(done_items / total_items * 100) if total_items else 0
+    bar_filled = int(done_items / total_items * 32) if total_items else 0
+    bar = "[bright_cyan]" + "█" * bar_filled + "[/bright_cyan]" + "[dim]" + "░" * (32 - bar_filled) + "[/dim]"
+
+    # Inner page bar
+    if page_total > 0:
+        pg_filled = int(page_done / page_total * 28)
+        pg_bar = "[cyan]" + "▪" * pg_filled + "[/cyan]" + "[dim]" + "·" * (28 - pg_filled) + "[/dim]"
+        pg_pct = int(page_done / page_total * 100)
+        page_line = (
+            f"  [dim]▶[/dim] [bright_white]{current_issue}[/bright_white]\n"
+            f"  {pg_bar}  [white]{page_done}[/white][dim]/{page_total}[/dim] pages  "
+            f"[yellow]{pg_pct}%[/yellow]"
+        )
+    else:
+        page_line = f"  [dim]▶[/dim] [bright_white]{current_issue}[/bright_white]  [dim]preparing…[/dim]"
+
+    header = (
+        f"[bold bright_cyan]◈ CNINTENDO FULL PIPELINE ◈[/bold bright_cyan]  "
+        f"[bright_white]{total_items}[/bright_white] [dim]issues[/dim]\n"
+        f"{bar}  [bright_white]{done_items}[/bright_white][dim]/{total_items}[/dim] issues  "
+        f"[bright_yellow]{pct}%[/bright_yellow]  [dim]ETA:[/dim] [yellow]{eta_str}[/yellow]\n"
+        f"{page_line}"
+    )
+
+    table = Table(box=box.SIMPLE_HEAD, show_footer=False, padding=(0, 1))
+    table.add_column("ISSUE", width=42)
+    table.add_column("STATUS", width=10)
+    table.add_column("PAGES", width=7, justify="right")
+    table.add_column("LLM", width=6, justify="right")
+    table.add_column("TIME", width=8, justify="right")
+
+    for entry in reversed(issue_log[-10:]):
+        status = entry.get("status", "done")
+        pages = entry.get("pages", 0)
+        llm_ok = entry.get("llm_ok", 0)
+        t = entry.get("elapsed", 0.0)
+        mins_e, secs_e = divmod(int(t), 60)
+        time_str = f"{mins_e}m{secs_e:02d}s"
+
+        if status == "error":
+            status_m = "[red]✗ error[/red]"
+            label_m = f"[red dim]{entry['issue'][:42]}[/red dim]"
+        elif status == "skipped":
+            status_m = "[dim]↷ skip[/dim]"
+            label_m = f"[dim]{entry['issue'][:42]}[/dim]"
+        else:
+            status_m = "[bright_green]✓ done[/bright_green]"
+            label_m = f"[bright_white]{entry['issue'][:42]}[/bright_white]"
+
+        table.add_row(label_m, status_m, f"[dim]{pages}[/dim]",
+                      f"[bright_cyan]{llm_ok}[/bright_cyan]", f"[dim]{time_str}[/dim]")
+
+    total_pages = global_stats.get("total_pages", 0)
+    total_llm = global_stats.get("total_llm", 0)
+    errors = global_stats.get("errors", 0)
+    avg_t = global_stats.get("avg_issue_time", 0.0)
+
+    footer_parts = [
+        f"[bright_white]▸ ISSUES: {done_items}/{total_items}[/bright_white]",
+        f"[bright_cyan]▸ PAGES: {total_pages}[/bright_cyan]",
+        f"[cyan]▸ LLM CALLS: {total_llm}[/cyan]",
+        f"[dim]▸ AVG: {avg_t:.0f}s/issue[/dim]",
+    ]
+    if errors:
+        footer_parts.append(f"[red]▸ ERRORS: {errors}[/red]")
+
+    return Panel(
+        Group(Text.from_markup(header), table, Text.from_markup("  ".join(footer_parts))),
+        border_style="bright_cyan",
+        title="[bold bright_cyan]▓ PIPELINE CONTROLLER ▓[/bold bright_cyan]",
+        title_align="left",
+    )
+
+
 def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
                         with_describe, with_summarize, retry_failed, with_enrich):
+    import time as _time
+    from rich.live import Live
     from cnintendo.scan_reader import discover_scans
     from cnintendo.commands.analyze import analyze as analyze_cmd
     from cnintendo.commands.summarize import summarize as summarize_cmd
     from cnintendo.commands.describe import describe as describe_cmd
     from cnintendo.commands.export import export as export_cmd
     from cnintendo.ollama_client import OllamaClient
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
 
     ollama_client = OllamaClient()
     use_process_pipeline = bool(ollama_client.process_prompt_id)
@@ -79,150 +180,212 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
 
     all_items = sorted(discover_scans(scans_dir), key=lambda i: i.date_sort_key)
 
-    # En modo retry, filtrar solo los items que fallaron anteriormente
     failures = _load_failures(data_dir)
     if retry_failed:
         if not failures:
             console.print("[yellow]No hay fallos registrados en run_failures.json.[/yellow]")
             return
         items = [i for i in all_items if i.identifier in failures]
-        console.print(f"[bold]Reintentando {len(items)} items fallidos[/bold] (de {len(all_items)} totales)")
     else:
         items = all_items
-        console.print(f"[bold]Encontrados {len(items)} items en {scans_dir}[/bold]")
+
+    # ── Live display state ────────────────────────────────────────────────────
+    issue_log: list[dict] = []
+    global_stats = {"total_pages": 0, "total_llm": 0, "errors": 0, "avg_issue_time": 0.0}
+    issue_times: list[float] = []
+    done_items = 0
+    page_done = 0
+    page_total = 0
+    current_issue = items[0].canonical_stem if items else ""
+    start_ts = _time.monotonic()
 
     try:
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                      BarColumn(), MofNCompleteColumn(), console=console) as progress:
-            task = progress.add_task("Procesando...", total=len(items))
+        with Live(
+            _build_run_display(len(items), 0, current_issue, 0, 0, issue_log, global_stats, start_ts),
+            console=console,
+            refresh_per_second=4,
+            vertical_overflow="visible",
+        ) as live:
+
+            def refresh():
+                live.update(_build_run_display(
+                    len(items), done_items, current_issue,
+                    page_done, page_total, issue_log, global_stats, start_ts,
+                ))
 
             for item in items:
+                nonlocal_page_done = [0]
+                nonlocal_page_total = [0]
+
                 stem = item.canonical_stem
                 item_dir = extracted_dir / item.output_subdir
                 item_dir.mkdir(parents=True, exist_ok=True)
-                extracted_json = item_dir / f"{stem}_extracted.json"
-                structured_json = item_dir / f"{stem}_structured.json"
-                summary_txt = item_dir / f"{stem}_summary.txt"
-                described_json = item_dir / f"{stem}_described.json"
 
-                progress.update(task, description=f"[cyan]{item.identifier[:40]}[/cyan]")
+                # Update current issue label
+                current_issue = stem
+                page_done = 0
+                page_total = 0
+                refresh()
+
+                issue_t0 = _time.monotonic()
 
                 if use_process_pipeline:
+                    llm_ok_this = [0]
+
+                    def on_page_run(page_num, total, page, elapsed, had_llm):
+                        nonlocal page_done, page_total
+                        page_total = total
+                        page_done = page_num - 1 + 1  # completed count
+                        if had_llm and page.llm:
+                            llm_ok_this[0] += 1
+                        refresh()
+
                     try:
-                        pages_json = _process_item(item, extracted_dir, ollama_client, force=force, start_page=1)
-                        progress.update(task, description=f"[cyan]{item.identifier[:40]}[/cyan]")
+                        pages_json = _process_item(
+                            item, extracted_dir, ollama_client,
+                            force=force, start_page=1, on_page=on_page_run,
+                        )
                         if with_enrich:
                             from cnintendo.commands.enrich import enrich_pages_json, _ollama_base_url, _ollama_model
                             enrich_pages_json(pages_json, _ollama_base_url(), _ollama_model(), force=force)
                         if item.identifier in failures:
                             del failures[item.identifier]
                             _save_failures(data_dir, failures)
+                        issue_elapsed = _time.monotonic() - issue_t0
+                        issue_times.append(issue_elapsed)
+                        global_stats["avg_issue_time"] = sum(issue_times) / len(issue_times)
+                        global_stats["total_pages"] += page_total
+                        global_stats["total_llm"] += llm_ok_this[0]
+                        issue_log.append({
+                            "issue": stem, "status": "done",
+                            "pages": page_total, "llm_ok": llm_ok_this[0],
+                            "elapsed": issue_elapsed,
+                        })
                     except Exception as e:
                         msg = f"[process] {e}"
                         logger.error(f"{item.identifier} {msg}")
                         failures[item.identifier] = "process"
                         _save_failures(data_dir, failures)
-                    finally:
-                        progress.advance(task)
+                        global_stats["errors"] += 1
+                        issue_log.append({
+                            "issue": stem, "status": "error",
+                            "pages": 0, "llm_ok": 0,
+                            "elapsed": _time.monotonic() - issue_t0,
+                        })
+
+                    done_items += 1
+                    refresh()
                     continue  # Skip the old OCR pipeline
 
-                # En retry, forzar re-proceso del paso que falló
+                # Old OCR pipeline (extract → analyze → summarize → describe)
+                extracted_json = item_dir / f"{stem}_extracted.json"
+                structured_json = item_dir / f"{stem}_structured.json"
+                summary_txt = item_dir / f"{stem}_summary.txt"
+                described_json = item_dir / f"{stem}_described.json"
+
                 failed_step = failures.get(item.identifier)
-                force_extract  = force or (retry_failed and failed_step == "extract")
-                force_analyze  = force or (retry_failed and failed_step in ("extract", "analyze"))
+                force_extract   = force or (retry_failed and failed_step == "extract")
+                force_analyze   = force or (retry_failed and failed_step in ("extract", "analyze"))
                 force_summarize = force or (retry_failed and failed_step in ("extract", "analyze", "summarize"))
                 force_describe  = force or (retry_failed and failed_step == "describe")
 
-                # Step 1: Extraer texto (tesseract) + limpiar OCR (gemma3n) + guardar por página
+                step_ok = True
                 if not extracted_json.exists() or force_extract:
                     try:
                         images_dir = item_dir / "images" / stem
                         extracted_data = item.to_extracted_dict(
-                            images_dir=images_dir, base_dir=item_dir,
-                            client=ollama_client
+                            images_dir=images_dir, base_dir=item_dir, client=ollama_client
                         )
-                        # Guardar JSON por página
                         for page in extracted_data.get("pages", []):
                             pn = page["page_number"]
                             page_json = item_dir / f"page_{pn:04d}.json"
-                            page_out = {
-                                "issue": stem,
-                                "page_number": pn,
-                                "text_ocr": page.get("text_ocr", ""),
-                                "image": page.get("images", [None])[0],
-                            }
+                            page_out = {"issue": stem, "page_number": pn,
+                                        "text_ocr": page.get("text_ocr", ""),
+                                        "image": page.get("images", [None])[0]}
                             if "text_clean" in page:
                                 page_out["text_clean"] = page["text_clean"]
-                            page_json.write_text(
-                                json.dumps(page_out, indent=2, ensure_ascii=False)
-                            )
-                        extracted_json.write_text(
-                            json.dumps(extracted_data, indent=2, ensure_ascii=False)
-                        )
+                            page_json.write_text(json.dumps(page_out, indent=2, ensure_ascii=False))
+                        extracted_json.write_text(json.dumps(extracted_data, indent=2, ensure_ascii=False))
                     except Exception as e:
-                        msg = f"[extract] {e}"
-                        logger.error(f"{item.identifier} {msg}")
+                        logger.error(f"{item.identifier} [extract] {e}")
                         failures[item.identifier] = "extract"
                         _save_failures(data_dir, failures)
-                        progress.advance(task)
-                        continue
+                        global_stats["errors"] += 1
+                        issue_log.append({"issue": stem, "status": "error", "pages": 0,
+                                          "llm_ok": 0, "elapsed": _time.monotonic() - issue_t0})
+                        done_items += 1
+                        refresh()
+                        step_ok = False
 
-                # Step 2: analyze
-                if not structured_json.exists() or force_analyze:
-                    try:
-                        ctx.invoke(analyze_cmd, extracted_json=extracted_json,
-                                   output=structured_json, force=force_analyze, no_clean=False)
-                    except (Exception, SystemExit) as e:
-                        msg = f"[analyze] {e}"
-                        logger.error(f"{item.identifier} {msg}")
-                        failures[item.identifier] = "analyze"
+                if step_ok:
+                    if not structured_json.exists() or force_analyze:
+                        try:
+                            ctx.invoke(analyze_cmd, extracted_json=extracted_json,
+                                       output=structured_json, force=force_analyze, no_clean=False)
+                        except (Exception, SystemExit) as e:
+                            logger.error(f"{item.identifier} [analyze] {e}")
+                            failures[item.identifier] = "analyze"
+                            _save_failures(data_dir, failures)
+                            global_stats["errors"] += 1
+                            issue_log.append({"issue": stem, "status": "error", "pages": 0,
+                                              "llm_ok": 0, "elapsed": _time.monotonic() - issue_t0})
+                            done_items += 1
+                            refresh()
+                            step_ok = False
+
+                if step_ok:
+                    if with_summarize and structured_json.exists() and (not summary_txt.exists() or force_summarize):
+                        try:
+                            ctx.invoke(summarize_cmd, structured_json=structured_json,
+                                       output=summary_txt, force=force_summarize)
+                        except (Exception, SystemExit) as e:
+                            logger.error(f"{item.identifier} [summarize] {e}")
+                            failures[item.identifier] = "summarize"
+                            _save_failures(data_dir, failures)
+
+                    if with_describe and extracted_json.exists() and (not described_json.exists() or force_describe):
+                        try:
+                            ctx.invoke(describe_cmd, extracted_json=extracted_json,
+                                       output=described_json, force=force_describe)
+                        except (Exception, SystemExit) as e:
+                            logger.error(f"{item.identifier} [describe] {e}")
+                            failures[item.identifier] = "describe"
+                            _save_failures(data_dir, failures)
+
+                    if item.identifier in failures:
+                        del failures[item.identifier]
                         _save_failures(data_dir, failures)
-                        progress.advance(task)
-                        continue
-
-                # Step 3: summarize (optional)
-                if with_summarize and structured_json.exists() and (not summary_txt.exists() or force_summarize):
-                    try:
-                        ctx.invoke(summarize_cmd, structured_json=structured_json,
-                                   output=summary_txt, force=force_summarize)
-                    except (Exception, SystemExit) as e:
-                        msg = f"[summarize] {e}"
-                        logger.error(f"{item.identifier} {msg}")
-                        failures[item.identifier] = "summarize"
-                        _save_failures(data_dir, failures)
-
-                # Step 4: describe images (optional, slow)
-                if with_describe and extracted_json.exists() and (not described_json.exists() or force_describe):
-                    try:
-                        ctx.invoke(describe_cmd, extracted_json=extracted_json,
-                                   output=described_json, force=force_describe)
-                    except (Exception, SystemExit) as e:
-                        msg = f"[describe] {e}"
-                        logger.error(f"{item.identifier} {msg}")
-                        failures[item.identifier] = "describe"
-                        _save_failures(data_dir, failures)
-
-                # Item completado: eliminar de fallos si estaba ahí
-                if item.identifier in failures:
-                    del failures[item.identifier]
-                    _save_failures(data_dir, failures)
-
-                progress.advance(task)
+                    issue_elapsed = _time.monotonic() - issue_t0
+                    issue_times.append(issue_elapsed)
+                    global_stats["avg_issue_time"] = sum(issue_times) / len(issue_times)
+                    issue_log.append({"issue": stem, "status": "done", "pages": 0,
+                                      "llm_ok": 0, "elapsed": issue_elapsed})
+                    done_items += 1
+                    refresh()
 
         if not skip_export:
-            console.print("\n[bold]Exportando a SQLite...[/bold]")
+            console.print("\n[bold bright_cyan]▓ Exportando a SQLite...[/bold bright_cyan]")
             try:
                 db_path = data_dir / "output.db"
                 ctx.invoke(export_cmd, input_dir=extracted_dir, db=db_path)
-                console.print(f"[green]Base de datos:[/green] {db_path}")
+                console.print(f"[bright_green]✓ Base de datos:[/bright_green] [bright_white]{db_path}[/bright_white]")
             except Exception as e:
                 console.print(f"[red]Error en export:[/red] {e}")
 
+        elapsed_total = _time.monotonic() - start_ts
+        h, rem = divmod(int(elapsed_total), 3600)
+        m, s = divmod(rem, 60)
+        time_str = f"{h}h {m:02d}m {s:02d}s" if h else f"{m}m {s:02d}s"
         if failures:
-            console.print(f"\n[yellow]Completado con {len(failures)} fallo(s).[/yellow] "
-                          f"Usa --retry-failed para reintentar. Log: {log_file}")
+            console.print(
+                f"\n[yellow]Completado con {len(failures)} fallo(s).[/yellow] "
+                f"Usa --retry-failed para reintentar. Log: {log_file}"
+            )
         else:
-            console.print(f"\n[green]Completado sin errores.[/green]")
+            console.print(
+                f"\n[bright_green]✓ Pipeline completado sin errores[/bright_green]  "
+                f"[dim]{global_stats['total_pages']} páginas  {global_stats['total_llm']} LLM calls  {time_str}[/dim]"
+            )
     finally:
         logger.removeHandler(file_handler)
         file_handler.close()
