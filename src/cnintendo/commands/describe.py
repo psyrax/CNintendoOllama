@@ -65,7 +65,9 @@ def describe(extracted_json: Path, output: Optional[Path], force: bool):
             continue
         click.echo(f"  Describiendo {img_path.name}...", err=True)
         try:
-            description = client.generate_vision(DESCRIBE_PROMPT, img_path).strip()
+            description = client.generate_vision(
+                DESCRIBE_PROMPT, img_path, prompt_id=client.describe_prompt_id, task="describe"
+            ).strip()
             results[img_path_str] = description
             processed += 1
         except Exception as e:

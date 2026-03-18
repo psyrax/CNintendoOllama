@@ -63,7 +63,7 @@ def summarize(structured_json: Path, output: Optional[Path], force: bool):
 
     client = OllamaClient()
     click.echo("Generando resumen...", err=True)
-    summary = client.generate(prompt).strip()
+    summary = client.generate(prompt, prompt_id=client.summarize_prompt_id, task="summarize").strip()
 
     if not summary:
         click.echo("Ollama devolvió respuesta vacía.", err=True)

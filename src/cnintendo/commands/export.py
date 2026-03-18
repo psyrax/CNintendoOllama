@@ -103,7 +103,15 @@ def _migrate_schema(db: sqlite_utils.Database) -> None:
             "djvu_text": str,
             "page_type": str,
             "llm_json": str,
+            "enriched_page_type": str,
+            "enriched_games": str,
+            "enriched_topics": str,
         }, pk="id", foreign_keys=[("issue_id", "issues", "id")], if_not_exists=True)
+    else:
+        existing_cols = {col.name for col in db["pages"].columns}
+        for col_name in ("enriched_page_type", "enriched_games", "enriched_topics"):
+            if col_name not in existing_cols:
+                db["pages"].add_column(col_name, str)
 
 
 def _get_or_create_game(db: sqlite_utils.Database, name: str, platform: Optional[str]) -> int:
@@ -137,6 +145,17 @@ def _export_pages_file(pages_file: Path, database: sqlite_utils.Database) -> tup
     raw = json.loads(pages_file.read_text())
     issue_pages = IssuePages(**raw)
 
+    # Load enrichment data if available
+    enriched_file = pages_file.with_name(pages_file.name.replace("_pages.json", "_enriched.json"))
+    enriched_by_page: dict[int, dict] = {}
+    if enriched_file.exists():
+        try:
+            enriched_data = json.loads(enriched_file.read_text())
+            for ep in enriched_data.get("pages", []):
+                enriched_by_page[ep["page_number"]] = ep
+        except Exception:
+            pass
+
     # Insert issue
     issue_row = {
         "filename": issue_pages.filename,
@@ -153,6 +172,7 @@ def _export_pages_file(pages_file: Path, database: sqlite_utils.Database) -> tup
     articles_count = 0
     for page in issue_pages.pages:
         llm = page.llm or {}
+        enriched = enriched_by_page.get(page.page_number, {})
         # Insert page
         database["pages"].insert({
             "issue_id": issue_id,
@@ -161,6 +181,9 @@ def _export_pages_file(pages_file: Path, database: sqlite_utils.Database) -> tup
             "djvu_text": page.djvu_text,
             "page_type": page.page_type_scandata,
             "llm_json": json.dumps(llm) if llm else None,
+            "enriched_page_type": enriched.get("page_type"),
+            "enriched_games": json.dumps(enriched.get("games") or [], ensure_ascii=False) if enriched else None,
+            "enriched_topics": json.dumps(enriched.get("topics") or [], ensure_ascii=False) if enriched else None,
         })
         # Insert article for content pages
         page_type = llm.get("page_type") if llm else None

@@ -53,7 +53,7 @@ def _save_failures(data_dir: Path, failures: dict[str, str]) -> None:
 
 
 def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
-                        with_describe, with_summarize, retry_failed):
+                        with_describe, with_summarize, retry_failed, with_enrich):
     from cnintendo.scan_reader import discover_scans
     from cnintendo.commands.analyze import analyze as analyze_cmd
     from cnintendo.commands.summarize import summarize as summarize_cmd
@@ -111,6 +111,9 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
                     try:
                         pages_json = _process_item(item, extracted_dir, ollama_client, force=force, start_page=1)
                         progress.update(task, description=f"[cyan]{item.identifier[:40]}[/cyan]")
+                        if with_enrich:
+                            from cnintendo.commands.enrich import enrich_pages_json, _ollama_base_url, _ollama_model
+                            enrich_pages_json(pages_json, _ollama_base_url(), _ollama_model(), force=force)
                         if item.identifier in failures:
                             del failures[item.identifier]
                             _save_failures(data_dir, failures)
@@ -240,15 +243,17 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
               help="Genera resumen narrativo de cada número.")
 @click.option("--retry-failed", is_flag=True,
               help="Re-procesa solo los items que fallaron en la última ejecución.")
+@click.option("--with-enrich", is_flag=True,
+              help="Ejecuta enriquecimiento con Ollama (juegos y tópicos) después del proceso.")
 def run(ctx: click.Context, pdf_dir: Optional[Path], data_dir: Optional[Path],
         force: bool, skip_export: bool, scans_dir: Optional[Path],
-        with_describe: bool, with_summarize: bool, retry_failed: bool):
+        with_describe: bool, with_summarize: bool, retry_failed: bool, with_enrich: bool):
     """Ejecuta el pipeline completo sobre una carpeta de PDFs."""
     data_dir = data_dir or Path("data")
 
     if scans_dir:
         _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
-                            with_describe, with_summarize, retry_failed)
+                            with_describe, with_summarize, retry_failed, with_enrich)
         return
 
     if pdf_dir is None:

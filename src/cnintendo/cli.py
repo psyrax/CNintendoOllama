@@ -3,6 +3,7 @@ from cnintendo.commands import inspect, extract, analyze, export, run as run_cmd
 from cnintendo.commands.summarize import summarize
 from cnintendo.commands.describe import describe
 from cnintendo.commands.process import process
+from cnintendo.commands.enrich import enrich
 
 
 @click.group()
@@ -20,3 +21,4 @@ main.add_command(run_cmd.run)
 main.add_command(summarize)
 main.add_command(describe)
 main.add_command(process)
+main.add_command(enrich)
