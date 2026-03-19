@@ -48,3 +48,4 @@ class IssueData(BaseModel):
     issue: IssueMetadata
     articles: list[Article] = Field(default_factory=list)
     summary: Optional[str] = None
+    pages_clean: list[dict] = Field(default_factory=list)

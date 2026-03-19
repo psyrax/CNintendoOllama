@@ -32,3 +32,6 @@ tools/benchmark_report.html
 
 # Claude Code
 .claude/
+
+# Git worktrees
+.worktrees/
