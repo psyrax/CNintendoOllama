@@ -6,6 +6,32 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+class BillingError(BaseException):
+    """Raised when the LLM provider rejects calls due to quota/billing issues.
+
+    Inherits from BaseException (not Exception) so it bypasses bare
+    'except Exception' handlers and propagates naturally up the call stack,
+    stopping the pipeline immediately.
+    """
+
+
+def _is_billing_error(exc: Exception) -> bool:
+    """Returns True if the exception indicates a quota/billing hard stop."""
+    msg = str(exc).lower()
+    billing_keywords = (
+        "insufficient_quota", "exceeded your current quota",
+        "billing", "hard limit", "account is not active",
+        "exceeded usage limit",
+    )
+    if any(kw in msg for kw in billing_keywords):
+        return True
+    # openai SDK: RateLimitError with code insufficient_quota
+    code = getattr(exc, "code", None) or getattr(getattr(exc, "error", None), "code", None)
+    if code and "insufficient_quota" in str(code):
+        return True
+    return False
+
+
 class OllamaClient:
     """Cliente LLM multi-proveedor. Soporta 'openai' y 'anthropic'.
     Configurar LLM_PROVIDER en .env para seleccionar el proveedor activo.
@@ -105,7 +131,12 @@ class OllamaClient:
         else:
             input_payload = [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}]
             kwargs = self._build_responses_kwargs(input_payload, model, max_tokens, prompt_id, task)
-            response = self._client.responses.create(**kwargs)
+            try:
+                response = self._client.responses.create(**kwargs)
+            except Exception as exc:
+                if _is_billing_error(exc):
+                    raise BillingError(f"OpenAI billing/quota error: {exc}") from exc
+                raise
             return response.output_text or ""
 
     def generate_vision(
@@ -160,7 +191,12 @@ class OllamaClient:
 
             input_payload = [{"role": "user", "content": content}]
             kwargs = self._build_responses_kwargs(input_payload, model, 1024, prompt_id, task)
-            response = self._client.responses.create(**kwargs)
+            try:
+                response = self._client.responses.create(**kwargs)
+            except Exception as exc:
+                if _is_billing_error(exc):
+                    raise BillingError(f"OpenAI billing/quota error: {exc}") from exc
+                raise
             return response.output_text or ""
 
     def is_available(self) -> bool:

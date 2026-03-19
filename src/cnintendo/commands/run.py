@@ -156,12 +156,13 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
                         with_describe, with_summarize, retry_failed, with_enrich):
     import time as _time
     from rich.live import Live
+    from rich.panel import Panel
     from cnintendo.scan_reader import discover_scans
     from cnintendo.commands.analyze import analyze as analyze_cmd
     from cnintendo.commands.summarize import summarize as summarize_cmd
     from cnintendo.commands.describe import describe as describe_cmd
     from cnintendo.commands.export import export as export_cmd
-    from cnintendo.ollama_client import OllamaClient
+    from cnintendo.ollama_client import BillingError, OllamaClient
 
     ollama_client = OllamaClient()
     use_process_pipeline = bool(ollama_client.process_prompt_id)
@@ -261,9 +262,22 @@ def _run_scans_pipeline(ctx, scans_dir, data_dir, force, skip_export,
                             "pages": page_total, "llm_ok": llm_ok_this[0],
                             "elapsed": issue_elapsed,
                         })
+                    except BillingError as e:
+                        live.update(Panel(
+                            f"[bold red]✗ BILLING / QUOTA ERROR — pipeline detenido[/bold red]\n\n"
+                            f"[red]{e}[/red]\n\n"
+                            f"[yellow]Issues completados: {done_items}/{len(items)}[/yellow]  "
+                            f"[yellow]Páginas completadas en issue actual: {page_done}[/yellow]\n"
+                            f"[dim]Recargá créditos en platform.openai.com y reintentá con --retry-failed[/dim]",
+                            border_style="red",
+                            title="[bold red]▓ QUOTA EXCEEDED ▓[/bold red]",
+                        ))
+                        failures[item.identifier] = "process"
+                        _save_failures(data_dir, failures)
+                        logger.error(f"{item.identifier} [billing] {e}")
+                        break  # Detener el loop de issues
                     except Exception as e:
-                        msg = f"[process] {e}"
-                        logger.error(f"{item.identifier} {msg}")
+                        logger.error(f"{item.identifier} [process] {e}")
                         failures[item.identifier] = "process"
                         _save_failures(data_dir, failures)
                         global_stats["errors"] += 1

@@ -10,7 +10,7 @@ from typing import Optional
 import click
 
 from cnintendo.models import IssuePages, PageProcessed
-from cnintendo.ollama_client import OllamaClient
+from cnintendo.ollama_client import BillingError, OllamaClient
 from cnintendo.scan_reader import (
     ScanItem,
     extract_jp2_images,
@@ -422,8 +422,20 @@ def process(scan_dir: Path, output: Optional[Path], force: bool, start_page: int
                 completed, total, scanning_page, log, stats, start_ts,
             ))
 
-        pages_json = _process_item(item, output_dir, client, force=force,
-                                   start_page=start_page, on_page=on_page_live)
+        try:
+            pages_json = _process_item(item, output_dir, client, force=force,
+                                       start_page=start_page, on_page=on_page_live)
+        except BillingError as e:
+            from rich.panel import Panel
+            live.update(Panel(
+                f"[bold red]✗ BILLING / QUOTA ERROR — pipeline detenido[/bold red]\n\n"
+                f"[red]{e}[/red]\n\n"
+                f"[yellow]Páginas completadas antes del error: {completed}[/yellow]\n"
+                f"[dim]Recargá créditos en platform.openai.com y reintentá con --start-page {completed + 1}[/dim]",
+                border_style="red",
+                title="[bold red]▓ QUOTA EXCEEDED ▓[/bold red]",
+            ))
+            raise SystemExit(1)
 
     elapsed_total = time.monotonic() - start_ts
     mins, secs = divmod(int(elapsed_total), 60)
