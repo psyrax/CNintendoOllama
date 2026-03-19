@@ -116,7 +116,7 @@ def _date_sort_key(path: Path) -> tuple[int, int]:
               default=Path("data/output.db"), show_default=True)
 def export(input_dir: Path, db: Path):
     """Exporta JSONs estructurados a una base de datos SQLite."""
-    json_files = sorted(input_dir.glob("*_structured.json"), key=_date_sort_key)
+    json_files = sorted(input_dir.rglob("*_structured.json"), key=_date_sort_key)
     if not json_files:
         click.echo(f"No se encontraron archivos *_structured.json en {input_dir}", err=True)
         return
@@ -142,6 +142,14 @@ def export(input_dir: Path, db: Path):
         if described_file.exists():
             try:
                 descriptions = json.loads(described_file.read_text())
+            except Exception:
+                pass
+
+        # Load summary from _summary.txt if it exists (takes priority over structured JSON)
+        summary_file = json_file.with_name(json_file.name.replace("_structured.json", "_summary.txt"))
+        if summary_file.exists():
+            try:
+                issue_data.summary = summary_file.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
 

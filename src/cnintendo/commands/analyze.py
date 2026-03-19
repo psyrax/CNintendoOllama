@@ -28,16 +28,17 @@ Estructura exacta requerida:
 
 Identifica cada artículo o reseña independiente. Omite páginas sin contenido claro."""
 
-CLEAN_TEXT_PROMPT = """Corrige y mejora el siguiente texto extraído de una revista de videojuegos en español.
+CLEAN_PAGE_PROMPT = """Eres un corrector de OCR. Corrige el siguiente texto extraído por OCR de una revista de videojuegos en español.
 
-TEXTO ORIGINAL:
 {text}
 
-INSTRUCCIONES:
-- Corrige errores de OCR (letras mal reconocidas, palabras cortadas, caracteres extraños).
-- Asegúrate de que el texto esté en español correcto y sea fluido y legible.
-- Mantén el significado y la información original, no inventes datos.
-- Devuelve ÚNICAMENTE el texto corregido, sin explicaciones ni comentarios."""
+Devuelve solo el texto corregido. Corrige errores de OCR, palabras cortadas y caracteres extraños. No agregues explicaciones."""
+
+CLEAN_TEXT_PROMPT = """Eres un corrector de OCR. Corrige el siguiente texto extraído de una revista de videojuegos en español.
+
+{text}
+
+Devuelve solo el texto corregido en español fluido. No agregues explicaciones."""
 
 
 def _strip_fences(response: str) -> str:
@@ -50,12 +51,36 @@ def _fix_invalid_escapes(s: str) -> str:
     return re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', s)
 
 
+_PROMPT_LEAK_MARKERS = (
+    "Corrige errores de OCR", "INSTRUCCIONES", "TEXTO ORIGINAL",
+    "Devuelve ÚNICAMENTE", "Devuelve solo el texto", "corrector de OCR",
+)
+
+
+def _is_leaked(result: str) -> bool:
+    return any(marker in result for marker in _PROMPT_LEAK_MARKERS)
+
+
+def _clean_page_text(client: OllamaClient, text: str) -> str:
+    if not text or not text.strip():
+        return text
+    result = client.generate(
+        CLEAN_PAGE_PROMPT.format(text=text),
+        prompt_id=client.clean_prompt_id,
+        task="clean",
+    ).strip()
+    return result if result and not _is_leaked(result) else text
+
+
 def _clean_article_text(client: OllamaClient, text: str) -> str:
     if not text or not text.strip():
         return text
-    prompt = CLEAN_TEXT_PROMPT.format(text=text)
-    result = client.generate(prompt)
-    return result.strip() or text
+    result = client.generate(
+        CLEAN_TEXT_PROMPT.format(text=text),
+        prompt_id=client.clean_prompt_id,
+        task="clean",
+    ).strip()
+    return result if result and not _is_leaked(result) else text
 
 
 @click.command()
@@ -81,9 +106,9 @@ def analyze(extracted_json: Path, output: Optional[Path], force: bool, no_clean:
         sys.exit(1)
 
     pages_text = "\n\n---\n\n".join(
-        f"[Página {p['page_number']}]\n{p['text']}"
+        f"[Página {p['page_number']}]\n{p.get('text_clean') or p.get('text_ocr') or p.get('text', '')}"
         for p in pages
-        if p.get("text", "").strip()
+        if (p.get('text_clean') or p.get('text_ocr') or p.get('text', '')).strip()
     )
 
     if not pages_text.strip():
@@ -91,10 +116,24 @@ def analyze(extracted_json: Path, output: Optional[Path], force: bool, no_clean:
         sys.exit(1)
 
     client = OllamaClient()
+
+    cleaned_pages = pages
+    if not no_clean:
+        click.echo(f"Limpiando OCR de {len(pages)} páginas...", err=True)
+        cleaned_pages = [
+            {**p, "text": _clean_page_text(client, p["text"])}
+            for p in pages
+        ]
+        pages_text = "\n\n---\n\n".join(
+            f"[Página {p['page_number']}]\n{p['text']}"
+            for p in cleaned_pages
+            if p.get("text", "").strip()
+        )
+
     prompt = ANALYZE_PROMPT_TEMPLATE.format(pages_text=pages_text[:8000])
 
-    click.echo("Llamando a Ollama para análisis estructurado...", err=True)
-    response = client.generate(prompt)
+    click.echo("Analizando con LLM...", err=True)
+    response = client.generate(prompt, prompt_id=client.analyze_prompt_id, task="analyze")
 
     cleaned = _strip_fences(response.strip())
 
@@ -152,7 +191,7 @@ def analyze(extracted_json: Path, output: Optional[Path], force: bool, no_clean:
     except KeyError as e:
         click.echo(f"Campo requerido faltante en JSON extraído: {e}", err=True)
         sys.exit(1)
-    issue_data = IssueData(issue=metadata, articles=articles)
+    issue_data = IssueData(issue=metadata, articles=articles, pages_clean=cleaned_pages)
 
     output.write_text(issue_data.model_dump_json(indent=2))
     click.echo(f"Analizado: {output} ({len(articles)} artículos)", err=True)
